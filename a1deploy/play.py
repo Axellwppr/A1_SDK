@@ -15,7 +15,7 @@ np.set_printoptions(precision=3, suppress=True, floatmode="fixed")
 
 
 class Arm:
-    def __init__(self, prev_steps=3, command_manager=None):
+    def __init__(self, prev_steps=3, arm=None, command_manager=None):
         print("init Arm")
         self.default_joint_pos = np.array([0.0, 0.2, -0.3, 0.0, 0.0, 0.0])
         self.dt = 0.02
@@ -24,17 +24,9 @@ class Arm:
         self.prev_actions = np.zeros((prev_steps, 5))
         self.last_action = np.zeros(5)
         self.command = np.zeros(10)
-        self.ee_pos = np.zeros(3)
-        self.ee_ori = np.zeros(3)
         self.obs = np.zeros(25)
         self.step_count = 0
-
-        self._arm = A1ArmInterface(
-            kp=[80, 80, 80, 20, 20, 20],
-            kd=[2, 2, 2, 1, 1, 1],
-            urdf_path="/home/axell/桌面/A1_SDK/install/share/mobiman/urdf/A1/urdf/A1_URDF_0607_0028.urdf",
-        )
-
+        self._arm = arm
         self._arm.start()
         self.command_manager = command_manager
 
@@ -55,9 +47,6 @@ class Arm:
         pos_t, vel_t = self._arm.get_joint_states()
         self.pos = pos_t.copy()
         self.vel = vel_t.copy()
-        ee_pos, ee_ori = self._arm.get_forward_kinematics()
-        self.ee_pos = ee_pos.copy()
-        self.ee_ori = ee_ori.copy()
 
     def step(self, action=None):
         self.step_count += 1
@@ -75,7 +64,7 @@ class Arm:
                 [0, 0, 0, 0, 0, 0],
             )
         self.update()
-        self.command = self.command_manager.update(self.ee_pos)
+        self.command = self.command_manager.update()
         return self._compute_obs()
 
     def _compute_obs(self):
@@ -97,7 +86,12 @@ def main():
     policy = torch.load(path, weights_only=False)
     policy.module[0].set_missing_tolerance(True)
 
-    robot = Arm(command_manager=FixedCommandManager())
+    arm = A1ArmInterface(
+        kp=[80, 80, 80, 20, 20, 20],
+        kd=[2, 2, 2, 1, 1, 1],
+        urdf_path="/home/axell/桌面/A1_SDK/install/share/mobiman/urdf/A1/urdf/A1_URDF_0607_0028.urdf",
+    )
+    robot = Arm(arm=arm, command_manager=FixedCommandManager(arm=arm, compliant=True))
 
     cmd, obs = robot.reset()
     cmd, obs = robot._compute_obs()
@@ -125,20 +119,20 @@ def main():
                 policy(td)
                 action = td["action"].cpu().numpy()[0]
                                 
-                if i > 999:
-                    np.save("obs.npy", obs_his)
-                    np.save("act.npy", act_his)
-                    np.save("cmd.npy", cmd_his)
-                    break
+                # if i > 999:
+                #     np.save("obs.npy", obs_his)
+                #     np.save("act.npy", act_his)
+                #     np.save("cmd.npy", cmd_his)
+                #     break
 
-                obs_his[i, :] = obs
-                act_his[i, :] = action
-                cmd_his[i, :] = cmd
+                # obs_his[i, :] = obs
+                # act_his[i, :] = action
+                # cmd_his[i, :] = cmd
 
                 
-                # breakpoint()
-                action = action_record[1, i, :]
-                print(i, action)
+                # # breakpoint()
+                # action = action_record[1, i, :]
+                # print(i, action)
                 # print(action)
                 # print(td["state_value"].item())
                 # print(processed_actions)

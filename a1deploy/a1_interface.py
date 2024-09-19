@@ -124,14 +124,18 @@ class A1ArmInterface:
         with self.joint_state_lock:
             return self.joint_positions, self.joint_velocities
 
-    def get_forward_kinematics(self) -> Tuple[List[float], List[float]]:
+    def get_forward_kinematics(self) -> Tuple[List[float], List[float], List[float]]:
         """
-        Compute forward kinematics and return the end-effector pose.
+        Compute forward kinematics and return the end-effector pose and linear velocity.
 
         Returns:
-            Tuple[List[float], List[float]]: Translation [x, y, z] and orientation [roll, pitch, yaw]
+            Tuple[List[float], List[float], List[float]]: Translation [x, y, z],
+            orientation [roll, pitch, yaw], and linear velocity [vx, vy, vz]
         """
         T = np.eye(4)
+        positions = []
+        axes = []
+        joint_types = []
 
         for joint_name, joint_angle in zip(
             self.joint_info.keys(), self.joint_positions
@@ -151,14 +155,43 @@ class A1ArmInterface:
             # Combine transformations
             T = T.dot(T_joint).dot(T_rot)
 
+            # Store the joint type (assuming 'revolute' or 'prismatic')
+            joint_type = joint.get('type', 'revolute')
+            joint_types.append(joint_type)
+
+            # Store the position of the joint (origin)
+            o_i = T[:3, 3]
+            positions.append(o_i)
+
+            # Compute the joint axis in the base frame
+            z_i = T[:3, :3].dot(axis)
+            axes.append(z_i)
+
         # Extract final translation and orientation
         translation = T[:3, 3]
         orientation = list(euler.mat2euler(T[:3, :3]))
-        
-        # TODO: check orientation
 
-        return translation, orientation
-    
+        # Compute the Jacobian matrix
+        n = len(self.joint_positions)
+        Jv = np.zeros((3, n))
+
+        o_n = translation  # End-effector position
+
+        for i in range(n):
+            z_i = axes[i]
+            o_i = positions[i]
+
+            if joint_types[i] == 'revolute':
+                Jv[:, i] = np.cross(z_i, o_n - o_i)
+            elif joint_types[i] == 'prismatic':
+                Jv[:, i] = z_i
+
+        # Compute linear velocity of the end-effector
+        q_dot = np.array(self.joint_velocities)
+        linear_velocity = Jv.dot(q_dot)
+
+        return np.array(translation), np.array(orientation), np.array(linear_velocity)
+        
 
 
 if __name__ == "__main__":
@@ -167,26 +200,27 @@ if __name__ == "__main__":
     try:
         rospy.init_node("a1_arm_interface", anonymous=True)
         arm_interface = A1ArmInterface(
-            # kp=[40, 40, 40, 20, 20, 20],
-            kp=[0, 0, 0, 0, 0, 0],
-            kd=[0, 0, 0, 0, 0, 0]
+            kp=[60, 60, 60, 20, 20, 20],
+            # kp=[0, 0, 0, 0, 0, 0],
+            kd=[2, 2, 2, 1, 1, 1],
+            urdf_path="/home/axell/桌面/A1_SDK/install/share/mobiman/urdf/A1/urdf/A1_URDF_0607_0028.urdf"
         )
-        nkp = np.array([40, 40, 40, 20, 20, 20])
-        nkd = np.array([2, 2, 2, 1, 1, 1])
+        # nkp = np.array([40, 40, 40, 20, 20, 20])
+        # nkd = np.array([2, 2, 2, 1, 1, 1])
         arm_interface.start()
 
         freq = 500
         rate = rospy.Rate(freq)
         # Example usage
-        steps = freq * 100
+        steps = freq * 10
         for step in range(steps):
             positions = [
                 # 1.0 * np.sin(2 * np.pi * step / steps),
                 0,
-                0.4 * (1 - np.cos(2 * np.pi * step / steps)),
+                0.8 * (1 - np.cos(2 * np.pi * step / steps)),
                 # 0,
                 # 0,
-                -0.4,
+                -0.6,
                 0,
                 0,
                 0,
@@ -202,18 +236,18 @@ if __name__ == "__main__":
 
             # if step > 100:
                 # positions = [0.0, 0.5, 0, 0., 0., 0.0]
-            current_positions, current_velocities = arm_interface.get_joint_states()
-            print("pos: ", np.array(current_positions))
-            print("vel: ", np.array(current_velocities))
-            torque = (nkp * (np.array(positions) - np.array(current_positions)) + nkd * (np.array(velocities) - np.array(current_velocities))).clip(-20, 20)
-            torque[-3:] = 0
+            # current_positions, current_velocities = arm_interface.get_joint_states()
+            # print("pos: ", np.array(current_positions))
+            # print("vel: ", np.array(current_velocities))
+            # torque = (nkp * (np.array(positions) - np.array(current_positions)) + nkd * (np.array(velocities) - np.array(current_velocities))).clip(-20, 20)
+            # torque[-3:] = 0
             
-            # arm_interface.set_targets(positions, velocities)
+            arm_interface.set_targets(positions, velocities)
             # arm_interface.set_feed_forward_torques(torque.tolist())
             # Read and print current joint states
             
             # print(f"Current positions: {np.array(current_positions)}")
-            # print(f"Current positions: {arm_interface.get_forward_kinematics()}")
+            print(f"Current positions: {arm_interface.get_forward_kinematics()}")
             rate.sleep()  # Sleep for 100ms between updates
 
         arm_interface.stop()

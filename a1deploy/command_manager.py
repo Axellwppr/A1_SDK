@@ -3,13 +3,12 @@ from abc import ABC, abstractmethod
 import numpy as np
 
 class CommandManagerInterface(ABC):
-
     @abstractmethod
     def reset(self):
         pass
 
     @abstractmethod
-    def update(self, current_ee_pos):
+    def update(self):
         pass
 
     @abstractmethod
@@ -18,18 +17,30 @@ class CommandManagerInterface(ABC):
 
 
 class FixedCommandManager(CommandManagerInterface):
-
-    def __init__(self, command=np.array([0.2, 0.2, 0.5, 100.0, 100.0, 100.0, 20.0, 20.0, 20.0, 1.0])):
-    # def __init__(self, command=np.array([0.2, 0.2, 0.5, 0, 0, 0, 0, 0, 0, 1.0])):
+    def __init__(self, arm=None, command=None, apply_scaling=True, compliant=False):
+        if command is None:
+            command = np.array([0.2, 0.2, 0.5, 80.0, 80.0, 80.0, 20.0, 20.0, 20.0, 1.0])
+        if compliant:
+            command[3:6] = 0
+        self.compliant = compliant
+        self.apply_scaling = apply_scaling
         self.command = command
+        self.arm = arm
 
     def reset(self):
         pass
 
-    def update(self, current_ee_pos):
+    def update(self):
         command = self.command.copy()
-        command[:3] -= current_ee_pos
-        # command[:3] = 0.0
+        ee_pos, ee_ori, ee_vel = self.arm.get_forward_kinematics()
+        print("ee_pos", ee_pos, "ee_vel", ee_vel)
+        command[:3] -= ee_pos
+        if self.apply_scaling:
+            command[3:6] *= command[:3]
+            command[6:9] *= - ee_vel
+        if self.compliant:
+            command[:3] = 0
+        print("command", command[:3])
         return command
     
     def close(self):
@@ -38,10 +49,10 @@ class FixedCommandManager(CommandManagerInterface):
 
 class KeyboardCommandManager(CommandManagerInterface):
 
-    # default_setpoint_pos_ee_b = np.array([0.1, 0.0, 0.4])
-
-    def __init__(self, step_size=0.01):
+    def __init__(self, arm=None, step_size=0.01, apply_scaling=False):
+        super().__init__(apply_scaling)
         self.step_size = step_size
+        self.arm = arm
 
         self.command = np.zeros(10)
 
@@ -101,7 +112,7 @@ class KeyboardCommandManager(CommandManagerInterface):
         self.command_setpoint_pos_ee_b = np.zeros(3)
         self.command_kp = np.array([100.0, 100.0, 100.0])
 
-    def update(self, current_ee_pos):
+    def update(self):
         delta = np.zeros(3)
 
         if self.key_pressed["up"]:
@@ -137,10 +148,6 @@ class KeyboardCommandManager(CommandManagerInterface):
             self.compliant_ee = not self.compliant_ee
             self.key_pressed["c"] = False  # Reset to avoid continuous toggling
 
-        # print(
-        #     f"Command: {self.command_setpoint_pos_ee_b}, kp: {self.command_kp}, kd: {self.command_kd}, compliant: {self.compliant_ee}"
-        # )
-
         # Compute the difference
         command_setpoint_pos_ee_diff_b = self.command_setpoint_pos_ee_b - current_ee_pos
 
@@ -150,6 +157,7 @@ class KeyboardCommandManager(CommandManagerInterface):
         self.command[6:9] = self.command_kd
         self.command[9] = self.mass
 
+        # Return command, scaling will be handled in the parent class
         return self.command
 
     def close(self):
