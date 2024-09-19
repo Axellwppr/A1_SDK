@@ -1,2 +1,5 @@
 .idea/
 .build/
+*.npy
+*.pt
+__pycache__
