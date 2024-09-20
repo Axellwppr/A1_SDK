@@ -6,6 +6,7 @@ from typing import List, Tuple
 import threading
 import xml.etree.ElementTree as ET
 from transforms3d import affines, euler
+from live_plot_client import LivePlotClient
 
 class A1ArmInterface:
     def __init__(
@@ -22,7 +23,7 @@ class A1ArmInterface:
         self.pub = rospy.Publisher(
             "/arm_joint_command_host", arm_control, queue_size=10
         )
-        
+        self.plot = LivePlotClient(ip="127.0.0.1", port=9999)
         self.rate = rospy.Rate(control_frequency)
         self.wait_init = True
         self.arm_control_msg = arm_control()
@@ -73,10 +74,13 @@ class A1ArmInterface:
             # Assuming the first 6 joints are the arm joints
             self.joint_positions = list(msg.position[:6])
             self.joint_velocities = list(msg.velocity[:6])
+            
             if self.wait_init:
                 # Set initial joint positions to the current joint positions
                 self.arm_control_msg.p_des = self.joint_positions.copy()
                 self.wait_init = False
+        print(self.joint_positions[:3])
+        self.plot.update(self.joint_positions[:3])
 
     def start(self):
         if not self.running:
@@ -247,7 +251,7 @@ if __name__ == "__main__":
             # Read and print current joint states
             
             # print(f"Current positions: {np.array(current_positions)}")
-            print(f"Current positions: {arm_interface.get_forward_kinematics()}")
+            # print(f"Current positions: {arm_interface.get_forward_kinematics()}")
             rate.sleep()  # Sleep for 100ms between updates
 
         arm_interface.stop()
