@@ -10,7 +10,7 @@ from tensordict import TensorDict
 from torchrl.envs.utils import set_exploration_type, ExplorationType
 from setproctitle import setproctitle
 from command_manager import FixedCommandManager, KeyboardCommandManager
-
+from live_plot_client import LivePlotClient
 np.set_printoptions(precision=3, suppress=True, floatmode="fixed")
 
 
@@ -29,6 +29,7 @@ class Arm:
         self._arm = arm
         self._arm.start()
         self.command_manager = command_manager
+        self.plot = LivePlotClient()
 
         while self._arm.wait_init:
             print("waiting for arm to be ready")
@@ -82,7 +83,7 @@ def main():
     setproctitle("play_a1")
     
     print("load policy")
-    path = "policy-a1-401.pt"
+    path = "policy-a1-427.pt"
     policy = torch.load(path, weights_only=False)
     policy.module[0].set_missing_tolerance(True)
 
@@ -114,11 +115,13 @@ def main():
         ).unsqueeze(0)
         with torch.inference_mode(), set_exploration_type(ExplorationType.MODE):
             for i in itertools.count():
-                print(f"iter {i}")
+                # print(f"iter {i}")
                 start = time.perf_counter()
                 policy(td)
                 action = td["action"].cpu().numpy()[0]
-                                
+                print("ext_pred", td["ext_pred"].numpy().tolist())
+        # self.plot.send_data(self.joint_positions[:3])
+                robot.plot.send(td["ext_pred"].numpy().flatten().tolist())
                 # if i > 999:
                 #     np.save("obs.npy", obs_his)
                 #     np.save("act.npy", act_his)

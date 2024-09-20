@@ -19,7 +19,7 @@ class CommandManagerInterface(ABC):
 class FixedCommandManager(CommandManagerInterface):
     def __init__(self, arm=None, command=None, apply_scaling=True, compliant=False):
         if command is None:
-            command = np.array([0.2, 0.2, 0.5, 80.0, 80.0, 80.0, 20.0, 20.0, 20.0, 1.0])
+            command = np.array([0.2, 0.2, 0.5, 40.0, 40.0, 40.0, 20.0, 20.0, 20.0, 1.0])
         if compliant:
             command[3:6] = 0
         self.compliant = compliant
@@ -33,7 +33,7 @@ class FixedCommandManager(CommandManagerInterface):
     def update(self):
         command = self.command.copy()
         ee_pos, ee_ori, ee_vel = self.arm.get_forward_kinematics()
-        print("ee_pos", ee_pos, "ee_vel", ee_vel)
+        # print("ee_pos", ee_pos, "ee_vel", ee_vel)
         command[:3] -= ee_pos
         if self.apply_scaling:
             command[3:6] *= command[:3]

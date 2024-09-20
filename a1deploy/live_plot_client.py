@@ -1,31 +1,24 @@
-import socket
-import struct
+import zmq
 import time
-import math
-
+import numpy as np
 
 class LivePlotClient:
-    def __init__(self, ip="127.0.0.1", port=9999):
-        self.ip = ip
-        self.port = port
-        self.dt = 0.02
-
-        # Create a UDP socket
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-
-    def send_data(self, yts: list):
-        # Pack the data into a binary format before sending
-        message = struct.pack(f'{len(yts)}f', *yts)
-        self.sock.sendto(message, (self.ip, self.port))
+    def __init__(self, zmq_addr="tcp://localhost:5555", send_interval=0.01):
+        self.context = zmq.Context()
+        self.socket = self.context.socket(zmq.PUSH)
+        self.socket.connect(zmq_addr)
+        self.send_interval = send_interval
 
     def test(self):
-        for i in range(400):
-            t = i * self.dt
-            yts = [math.sin(t), math.cos(t)]
-            self.send_data(yts)
-            time.sleep(self.dt)
+        while True:
+            # 生成随机数据
+            data = np.random.rand(3).tolist()  # 假设发送长度为3的浮点数列表
+            self.socket.send_pyobj(data)
+            time.sleep(self.send_interval)  # 控制发送速度
+    
+    def send(self, data):
+        self.socket.send_pyobj(data)
 
-
-if __name__ == "__main__":
-    client = LivePlotClient("127.0.0.1", 9999)
-    client.test()
+if __name__ == '__main__':
+    sender = LivePlotClient()
+    sender.test()

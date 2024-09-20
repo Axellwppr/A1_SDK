@@ -1,74 +1,79 @@
-import matplotlib.pyplot as plt
-import numpy as np
-import socket
-import struct
+import zmq
+import threading
+import pyqtgraph as pg
+from pyqtgraph.Qt import QtWidgets, QtCore
+import sys
 
+class RealTimePlotter(QtCore.QObject):
+    data_received = QtCore.pyqtSignal(list)  # Signal to communicate with the main thread
 
-class LivePlotServer:
-    def __init__(self, span: float = 2):
-        self.span = span
-        self.dt = 0.02
-        self.fig = None
-        self.axes = None
-        self.x = None
-        self.ys = None
-        self.lines = None
-        self.bg = None
+    def __init__(self):
+        super().__init__()
+        self.app = QtWidgets.QApplication(sys.argv)
+        self.win = pg.GraphicsLayoutWidget(show=True, title="Real-Time Plotting")
+        self.plots = []
+        self.curves = []
+        self.data = []
 
-    def initialize_plot(self, n: int):
-        # Initialize the plot based on the new number of plots
-        self.n = n
-        self.fig, self.axes = plt.subplots(self.n, 1, squeeze=False)
-        self.x = list(range(int(self.span / self.dt)))
-        self.ys = [[0] * len(self.x) for _ in range(self.n)]
-        self.lines = []
+        # Set up ZeroMQ and the thread to receive data
+        self.context = zmq.Context()
+        self.socket = self.context.socket(zmq.PULL)
+        self.socket.bind("tcp://*:5555")
+        self.thread = threading.Thread(target=self.receive_data)
+        self.thread.daemon = True
+        self.thread.start()
 
-        for i in range(self.n):
-            ax = self.axes[i, 0]  # Adjusted for single column subplots
-            ln = ax.plot(self.x, self.ys[i], animated=True)[0]
-            ax.set_ylim(-1, 1)
-            self.lines.append(ln)
+        # Connect the data_received signal to the update_plots slot
+        self.data_received.connect(self.update_plots)
 
-        plt.show(block=False)
-        plt.pause(0.1)
+        # Set up a timer to regularly update the plots
+        self.timer = QtCore.QTimer()
+        self.timer.timeout.connect(self.update)
+        self.timer.start(50)  # Update every 50 milliseconds
 
-        # Save the current figure background
-        self.bg = self.fig.canvas.copy_from_bbox(self.fig.bbox)
-        self.fig.canvas.blit(self.fig.bbox)
-
-    def update_plot(self, yts: list):
-        if self.fig is None or len(yts) != self.n:
-            # Reinitialize plot if data length is different
-            print(f"Data length changed. Reinitializing plot to {len(yts)} plots.")
-            self.initialize_plot(len(yts))
-
-        # Restore the figure background before drawing
-        self.fig.canvas.restore_region(self.bg)
-        
-        # Update each line with the new data
-        for ax, ln, y, yt in zip(self.axes[:, 0], self.lines, self.ys, yts):
-            y.pop(0)
-            y.append(yt)
-            ln.set_ydata(y)
-            ax.draw_artist(ln)
-
-        # Redraw the canvas with updated data
-        self.fig.canvas.blit(self.fig.bbox)
-        self.fig.canvas.flush_events()
-
-    def start_server(self, ip="0.0.0.0", port=9999):
-        # Create UDP socket for receiving data
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.bind((ip, port))
-        print(f"Listening on {ip}:{port}")
-
+    def receive_data(self):
+        """Receive data in a separate thread and emit it to the main thread."""
         while True:
-            data, addr = sock.recvfrom(1024)  # buffer size is 1024 bytes
-            num_floats = len(data) // 4  # each float is 4 bytes
-            yts = struct.unpack(f'{num_floats}f', data)
-            self.update_plot(list(yts))
+            data = self.socket.recv_pyobj()  # Receive data from ZeroMQ
+            self.data_received.emit(data)  # Emit the data as a signal to the main thread
 
+    def update_plots(self, data):
+        """Update the plots in the main thread based on the received data."""
+        n = len(data)
+        if n != len(self.plots):
+            self.win.clear()
+            self.plots = []
+            self.curves = []
+            self.data = [[] for _ in range(n)]
+            for i in range(n):
+                p = self.win.addPlot(row=i, col=0)
+                
+                # 固定Y轴范围 (例如设置为 0 到 1)
+                p.setYRange(-3, 3)  # 调整上下界范围
+                p.setXRange(0, 500)  # 假设你希望在X轴上也固定范围
+                
+                # 创建曲线，设置线条颜色和粗细
+                c = p.plot(pen=pg.mkPen(width=2))  # 设置线条宽度为2像素
+                
+                self.plots.append(p)
+                self.curves.append(c)
+                # 在y=0位置画一条水平线
+                hline = pg.InfiniteLine(pos=0, angle=0, pen=pg.mkPen(color='r', width=1))  # 红色，线宽1
+                p.addItem(hline)
+        # Update the data
+        for i in range(n):
+            self.data[i].append(data[i])
+            if len(self.data[i]) > 500:  # Keep the data length under 500
+                self.data[i] = self.data[i][-500:]
 
-if __name__ == "__main__":
-    server = LivePlotServer()
-    server.start_server()
+    def update(self):
+        """Update the curves with the latest data."""
+        for i, curve in enumerate(self.curves):
+            curve.setData(self.data[i])
+
+    def run(self):
+        self.app.exec_()
+
+if __name__ == '__main__':
+    plotter = RealTimePlotter()
+    plotter.run()

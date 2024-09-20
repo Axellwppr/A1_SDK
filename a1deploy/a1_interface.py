@@ -23,7 +23,7 @@ class A1ArmInterface:
         self.pub = rospy.Publisher(
             "/arm_joint_command_host", arm_control, queue_size=10
         )
-        self.plot = LivePlotClient(ip="127.0.0.1", port=9999)
+        # self.plot = LivePlotClient(ip="127.0.0.1", port=9999)
         self.rate = rospy.Rate(control_frequency)
         self.wait_init = True
         self.arm_control_msg = arm_control()
@@ -79,8 +79,8 @@ class A1ArmInterface:
                 # Set initial joint positions to the current joint positions
                 self.arm_control_msg.p_des = self.joint_positions.copy()
                 self.wait_init = False
-        print(self.joint_positions[:3])
-        self.plot.update(self.joint_positions[:3])
+        # print(self.joint_positions[:3])
+        # self.plot.send_data(self.joint_positions[:3])
 
     def start(self):
         if not self.running:
