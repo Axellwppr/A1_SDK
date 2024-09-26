@@ -11,7 +11,7 @@ from live_plot_client import LivePlotClient
 class A1ArmInterface:
     def __init__(
         self,
-        control_frequency: int = 500,
+        control_frequency: int = 1000,
         kp: List[float] = [40, 40, 40, 20, 20, 20],
         kd: List[float] = [40, 40, 40, 1, 1, 1],
         urdf_path: str = "",
@@ -204,10 +204,12 @@ if __name__ == "__main__":
     try:
         rospy.init_node("a1_arm_interface", anonymous=True)
         arm_interface = A1ArmInterface(
-            kp=[60, 60, 60, 20, 20, 20],
-            # kp=[0, 0, 0, 0, 0, 0],
-            kd=[2, 2, 2, 1, 1, 1],
-            urdf_path="/home/axell/桌面/A1_SDK/install/share/mobiman/urdf/A1/urdf/A1_URDF_0607_0028.urdf"
+            # kp=[60, 60, 60, 20, 20, 20],
+            kp=[0, 0, 0, 0, 0, 0],
+            # kd=[2, 2, 2, 1, 1, 1],
+            kd=[40, 40, 40, 1, 1, 1],
+            urdf_path="/home/unitree/A1SDKARM/install/share/mobiman/urdf/A1/urdf/A1_URDF_0607_0028.urdf",
+            # urdf_path="/home/axell/桌面/A1_SDK/install/share/mobiman/urdf/A1/urdf/A1_URDF_0607_0028.urdf"
         )
         # nkp = np.array([40, 40, 40, 20, 20, 20])
         # nkd = np.array([2, 2, 2, 1, 1, 1])
@@ -216,8 +218,10 @@ if __name__ == "__main__":
         freq = 500
         rate = rospy.Rate(freq)
         # Example usage
-        steps = freq * 10
+        steps = freq * 100000
         for step in range(steps):
+            print(arm_interface.get_forward_kinematics()[0])
+            print(arm_interface.joint_positions)
             positions = [
                 # 1.0 * np.sin(2 * np.pi * step / steps),
                 0,
@@ -246,7 +250,7 @@ if __name__ == "__main__":
             # torque = (nkp * (np.array(positions) - np.array(current_positions)) + nkd * (np.array(velocities) - np.array(current_velocities))).clip(-20, 20)
             # torque[-3:] = 0
             
-            arm_interface.set_targets(positions, velocities)
+            # arm_interface.set_targets(positions, velocities)
             # arm_interface.set_feed_forward_torques(torque.tolist())
             # Read and print current joint states
             

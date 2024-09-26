@@ -21,7 +21,7 @@ class Arm:
         self.dt = 0.02
         self.pos = np.zeros(6)
         self.vel = np.zeros(6)
-        self.prev_actions = np.zeros((prev_steps, 5))
+        self.prev_actions = np.zeros((5, prev_steps))
         self.last_action = np.zeros(5)
         self.command = np.zeros(10)
         self.obs = np.zeros(25)
@@ -29,7 +29,7 @@ class Arm:
         self._arm = arm
         self._arm.start()
         self.command_manager = command_manager
-        self.plot = LivePlotClient()
+        self.plot = LivePlotClient(zmq_addr="tcp://127.0.0.1:5555")
 
         while self._arm.wait_init:
             print("waiting for arm to be ready")
@@ -53,9 +53,9 @@ class Arm:
         self.step_count += 1
         if action is not None:
             action = action.clip(-2 * np.pi, 2 * np.pi)
-            self.prev_actions[1:, :] = self.prev_actions[:-1, :]
-            self.prev_actions[0] = action
-            self.last_action = self.last_action * 0.5 + action * 0.5
+            self.prev_actions[:, 1:] = self.prev_actions[:, :-1]
+            self.prev_actions[:, 0] = action
+            self.last_action = self.last_action * 0.8+ action * 0.2
             target = self.default_joint_pos.copy()
             target[:5] += self.last_action * 0.5
             target = target.clip(-np.pi, np.pi)
@@ -64,6 +64,8 @@ class Arm:
                 target.tolist(),
                 [0, 0, 0, 0, 0, 0],
             )
+            # print("pos_target", target)
+            # print("pos",self.pos)
         self.update()
         self.command = self.command_manager.update()
         return self._compute_obs()
@@ -73,6 +75,7 @@ class Arm:
         self.obs[5:10] = self.vel[:5]
         self.obs[10:25] = self.prev_actions.flatten()
         return self.command, self.obs
+        # return self.command, np.concatenate([self.command, self.obs])
 
 def main():
     rospy.init_node("a1_arm_interface", anonymous=True)
@@ -83,16 +86,20 @@ def main():
     setproctitle("play_a1")
     
     print("load policy")
+    # path = "policy-a1-427.pt"
     path = "policy-a1-427.pt"
     policy = torch.load(path, weights_only=False)
     policy.module[0].set_missing_tolerance(True)
 
     arm = A1ArmInterface(
-        kp=[80, 80, 80, 20, 20, 20],
+        kp=[80, 80, 80, 30, 30, 30],
         kd=[2, 2, 2, 1, 1, 1],
+        # urdf_path="/home/unitree/A1SDKARM/install/share/mobiman/urdf/A1/urdf/A1_URDF_0607_0028.urdf",
         urdf_path="/home/axell/桌面/A1_SDK/install/share/mobiman/urdf/A1/urdf/A1_URDF_0607_0028.urdf",
     )
-    robot = Arm(arm=arm, command_manager=FixedCommandManager(arm=arm, compliant=True))
+    # robot = Arm(arm=arm, command_manager=FixedCommandManager(arm=arm, compliant=True))
+    robot = Arm(arm=arm, command_manager=KeyboardCommandManager(arm=arm))
+    # robot = Arm(arm=arm, command_manager=FixedCommandManager(arm=arm))
 
     cmd, obs = robot.reset()
     cmd, obs = robot._compute_obs()
@@ -119,9 +126,12 @@ def main():
                 start = time.perf_counter()
                 policy(td)
                 action = td["action"].cpu().numpy()[0]
-                print("ext_pred", td["ext_pred"].numpy().tolist())
+
+                # print("ext_pred", td["ext_pred"].numpy().tolist())
         # self.plot.send_data(self.joint_positions[:3])
-                robot.plot.send(td["ext_pred"].numpy().flatten().tolist())
+                # print("ee_pos", robot._arm.get_forward_kinematics()[0])
+                # robot.plot.send(action.tolist())
+                # print(action + robot.default_joint_pos)
                 # if i > 999:
                 #     np.save("obs.npy", obs_his)
                 #     np.save("act.npy", act_his)

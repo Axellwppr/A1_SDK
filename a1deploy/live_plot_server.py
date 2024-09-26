@@ -49,7 +49,7 @@ class RealTimePlotter(QtCore.QObject):
                 p = self.win.addPlot(row=i, col=0)
                 
                 # 固定Y轴范围 (例如设置为 0 到 1)
-                p.setYRange(-3, 3)  # 调整上下界范围
+                p.setYRange(-4, 4)  # 调整上下界范围
                 p.setXRange(0, 500)  # 假设你希望在X轴上也固定范围
                 
                 # 创建曲线，设置线条颜色和粗细
