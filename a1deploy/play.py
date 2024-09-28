@@ -1,16 +1,16 @@
-import torch
-import itertools
-import argparse
-import time
-import rospy
-from typing import Tuple
 from a1_interface import A1ArmInterface
-from tensordict import TensorDict
-from torchrl.envs.utils import set_exploration_type, ExplorationType
-from setproctitle import setproctitle
 from command_manager import KeyboardCommandManager
 from live_plot_client import LivePlotClient
+from setproctitle import setproctitle
+from tensordict import TensorDict
+from torchrl.envs.utils import set_exploration_type, ExplorationType
+from typing import Tuple
+import argparse
+import itertools
 import pytorch_kinematics as pk
+import rospy
+import time
+import torch
 
 try:
     profile
@@ -97,28 +97,26 @@ class Arm:
 
 def main():
     rospy.init_node("a1_arm_interface", anonymous=True)
-
-    parser = argparse.ArgumentParser()
-    args = parser.parse_args()
     setproctitle("play_a1")
 
-    print("load policy")
     path = "policy-a1-427.pt"
     policy = torch.load(path, weights_only=False)
     policy.module[0].set_missing_tolerance(True)
+    torch.set_grad_enabled(False)
 
-    with torch.inference_mode(), set_exploration_type(ExplorationType.MODE):
-        try:
-            arm = A1ArmInterface(kp=[80, 80, 80, 30, 30, 30], kd=[2, 2, 2, 1, 1, 1])
-            dt = 0.02
-            robot = Arm(
-                dt=dt,
-                arm=arm,
-                command_manager=KeyboardCommandManager(),
-                urdf_path="/home/axell/桌面/A1_SDK/install/share/mobiman/urdf/A1/urdf/A1_URDF_0607_0028.urdf",
-            )
-            robot.reset()
-            cmd, obs = robot.compute_obs()
+    try:
+        arm = A1ArmInterface(kp=[80, 80, 80, 30, 30, 30], kd=[2, 2, 2, 1, 1, 1])
+        dt = 0.02
+        robot = Arm(
+            dt=dt,
+            arm=arm,
+            command_manager=KeyboardCommandManager(),
+            urdf_path="/home/axell/桌面/A1_SDK/install/share/mobiman/urdf/A1/urdf/A1_URDF_0607_0028.urdf",
+        )
+        robot.reset()
+        cmd, obs = robot.compute_obs()
+
+        with torch.inference_mode(), set_exploration_type(ExplorationType.MODE):
             td = TensorDict(
                 {
                     "policy": obs,
@@ -144,12 +142,12 @@ def main():
 
                 robot.take_action(action)
                 # print("action", action)
-                print("time cost", time.perf_counter() - start)
+                # print("time cost", time.perf_counter() - start)
                 time.sleep(max(0, dt - (time.perf_counter() - start)))
 
-        except KeyboardInterrupt:
-            robot.close()
-            print("End")
+    except KeyboardInterrupt:
+        robot.close()
+        print("End")
 
 
 if __name__ == "__main__":

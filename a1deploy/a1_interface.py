@@ -7,6 +7,7 @@ import threading
 from live_plot_client import LivePlotClient
 import time
 
+
 class A1ArmInterface:
     def __init__(
         self,
@@ -57,7 +58,7 @@ class A1ArmInterface:
             # Assuming the first 6 joints are the arm joints
             self.joint_positions[:6] = msg.position[:6]
             self.joint_velocities[:6] = msg.velocity[:6]
-            
+
             if self.wait_init:
                 self.arm_control_msg.p_des = self.joint_positions.tolist()
                 self.start_time = time.perf_counter()
@@ -106,6 +107,7 @@ class A1ArmInterface:
         with self.joint_state_lock:
             return self.joint_positions.clone(), self.joint_velocities.clone()
 
+
 if __name__ == "__main__":
     # set print precision
     try:
@@ -142,17 +144,17 @@ if __name__ == "__main__":
             ]  # You may want to calculate proper velocities
 
             # if step > 100:
-                # positions = [0.0, 0.5, 0, 0., 0., 0.0]
+            # positions = [0.0, 0.5, 0, 0., 0., 0.0]
             # current_positions, current_velocities = arm_interface.get_joint_states()
             # print("pos: ", np.array(current_positions))
             # print("vel: ", np.array(current_velocities))
             # torque = (nkp * (np.array(positions) - np.array(current_positions)) + nkd * (np.array(velocities) - np.array(current_velocities))).clip(-20, 20)
             # torque[-3:] = 0
-            
+
             # arm_interface.set_targets(positions, velocities)
             # arm_interface.set_feed_forward_torques(torque.tolist())
             # Read and print current joint states
-            
+
             # print(f"Current positions: {np.array(current_positions)}")
             # print(f"Current positions: {arm_interface.get_forward_kinematics()}")
             rate.sleep()  # Sleep for 100ms between updates

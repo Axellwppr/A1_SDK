@@ -4,8 +4,11 @@ import pyqtgraph as pg
 from pyqtgraph.Qt import QtWidgets, QtCore
 import sys
 
-class RealTimePlotter(QtCore.QObject):
-    data_received = QtCore.pyqtSignal(list)  # Signal to communicate with the main thread
+
+class LivePlotServer(QtCore.QObject):
+    data_received = QtCore.pyqtSignal(
+        list
+    )  # Signal to communicate with the main thread
 
     def __init__(self):
         super().__init__()
@@ -35,7 +38,9 @@ class RealTimePlotter(QtCore.QObject):
         """Receive data in a separate thread and emit it to the main thread."""
         while True:
             data = self.socket.recv_pyobj()  # Receive data from ZeroMQ
-            self.data_received.emit(data)  # Emit the data as a signal to the main thread
+            self.data_received.emit(
+                data
+            )  # Emit the data as a signal to the main thread
 
     def update_plots(self, data):
         """Update the plots in the main thread based on the received data."""
@@ -47,18 +52,20 @@ class RealTimePlotter(QtCore.QObject):
             self.data = [[] for _ in range(n)]
             for i in range(n):
                 p = self.win.addPlot(row=i, col=0)
-                
+
                 # 固定Y轴范围 (例如设置为 0 到 1)
                 p.setYRange(-4, 4)  # 调整上下界范围
                 p.setXRange(0, 500)  # 假设你希望在X轴上也固定范围
-                
+
                 # 创建曲线，设置线条颜色和粗细
                 c = p.plot(pen=pg.mkPen(width=2))  # 设置线条宽度为2像素
-                
+
                 self.plots.append(p)
                 self.curves.append(c)
                 # 在y=0位置画一条水平线
-                hline = pg.InfiniteLine(pos=0, angle=0, pen=pg.mkPen(color='r', width=1))  # 红色，线宽1
+                hline = pg.InfiniteLine(
+                    pos=0, angle=0, pen=pg.mkPen(color="r", width=1)
+                )  # 红色，线宽1
                 p.addItem(hline)
         # Update the data
         for i in range(n):
@@ -74,6 +81,7 @@ class RealTimePlotter(QtCore.QObject):
     def run(self):
         self.app.exec_()
 
-if __name__ == '__main__':
-    plotter = RealTimePlotter()
+
+if __name__ == "__main__":
+    plotter = LivePlotServer()
     plotter.run()

@@ -1,17 +1,15 @@
-import torch
-import time
-import datetime
+from a1_interface import A1ArmInterface
+from play import Arm
+from torchrl.envs.utils import set_exploration_type, ExplorationType
+from typing import Union, Tuple
 import argparse
-import rospy
+import datetime
 import itertools
 import math
 import numpy as np
-from a1_interface import A1ArmInterface
-from tensordict import TensorDict
-from torchrl.envs.utils import set_exploration_type, ExplorationType
-from setproctitle import setproctitle
-from play import Arm
-from typing import Union, Tuple
+import rospy
+import time
+import torch
 
 
 class Arm_test(Arm):
@@ -74,45 +72,46 @@ from pathgen import PathGenerator
 if __name__ == "__main__":
     rospy.init_node("a1_arm_interface", anonymous=True)
     path = "/home/axell/桌面/A1_SDK/install/share/mobiman/urdf/A1/urdf/A1_URDF_0607_0028.urdf"
-    with torch.inference_mode():
-        arm = A1ArmInterface(kp=[120, 120, 80, 30, 30, 30], kd=[2, 2, 2, 1, 1, 0.4])
-        dt = 0.02
-        robot = Arm_test(arm=arm, dt=dt, urdf_path=path)
-        ik = IK(robot)
+    torch.set_grad_enabled(False)
 
-        r = 0.15
-        default_target_pos = torch.tensor([0.3, 0, 0.4])
-        length = 2000
-        for _ in range(10):
-            pg = PathGenerator()
-            his_pos = torch.zeros((length, 3))
-            t = 0
-            for i in itertools.count():
-                if i % 100 == 0:
-                    print("rate = ", arm.count / (time.perf_counter() - arm.start_time))
-                if i >= length:
-                    break
-                t_start = time.perf_counter()
-                if i % 1 == 0:
-                    t = i * dt
-                # target_pos = default_target_pos  + torch.tensor([0.0, r *math.cos(t), r * math.sin(t)])
-                # target_pos = default_target_pos  + lemniscate(t, 0.2) * torch.tensor([1.0, 0.4, 0.5])
-                # target_vel = torch.tensor([0., r * -math.sin(t), r * math.cos(t)])
-                target_pos = pg.get_position(t)
-                # target_pos = default_target_pos
-                # print(target_pos)
-                target_vel = torch.tensor([0.0, 0.0, 0.0])
-                joint_pos, joint_vel, tau_ff = ik.compute(target_pos, target_vel)
-                his_pos[i] = target_pos
-                # print(joint_pos)
+    arm = A1ArmInterface(kp=[120, 120, 80, 30, 30, 30], kd=[2, 2, 2, 1, 1, 0.4])
+    dt = 0.02
+    robot = Arm_test(arm=arm, dt=dt, urdf_path=path)
+    ik = IK(robot)
 
-                robot.step(joint_pos)
-                step_time = time.perf_counter() - t_start
-                # print("step_time", step_time)
-                time.sleep(max(0, dt - step_time))
+    r = 0.15
+    default_target_pos = torch.tensor([0.3, 0, 0.4])
+    length = 2000
+    for _ in range(10):
+        pg = PathGenerator()
+        his_pos = torch.zeros((length, 3))
+        t = 0
+        for i in itertools.count():
+            if i % 100 == 0:
+                print("rate = ", arm.count / (time.perf_counter() - arm.start_time))
+            if i >= length:
+                break
+            t_start = time.perf_counter()
+            if i % 1 == 0:
+                t = i * dt
+            # target_pos = default_target_pos  + torch.tensor([0.0, r *math.cos(t), r * math.sin(t)])
+            # target_pos = default_target_pos  + lemniscate(t, 0.2) * torch.tensor([1.0, 0.4, 0.5])
+            # target_vel = torch.tensor([0., r * -math.sin(t), r * math.cos(t)])
+            target_pos = pg.get_position(t)
+            # target_pos = default_target_pos
+            # print(target_pos)
+            target_vel = torch.tensor([0.0, 0.0, 0.0])
+            joint_pos, joint_vel, tau_ff = ik.compute(target_pos, target_vel)
+            his_pos[i] = target_pos
+            # print(joint_pos)
 
-            # 获取当前时间并格式化
-            current_time = datetime.datetime.now()
-            formatted_time = current_time.strftime("%Y-%m-%d_%H-%M-%S")
-            his_pos = his_pos.numpy()
-            np.save(f"./his/his_pos_{formatted_time}.npy", his_pos)
+            robot.step(joint_pos)
+            step_time = time.perf_counter() - t_start
+            # print("step_time", step_time)
+            time.sleep(max(0, dt - step_time))
+
+        # 获取当前时间并格式化
+        current_time = datetime.datetime.now()
+        formatted_time = current_time.strftime("%Y-%m-%d_%H-%M-%S")
+        his_pos = his_pos.numpy()
+        np.save(f"./his/his_pos_{formatted_time}.npy", his_pos)
