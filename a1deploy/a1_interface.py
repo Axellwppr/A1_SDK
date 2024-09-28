@@ -1,12 +1,11 @@
 import rospy
-import numpy as np
+import torch
 from sensor_msgs.msg import JointState
 from signal_arm.msg import arm_control
 from typing import List, Tuple
 import threading
-import xml.etree.ElementTree as ET
-from transforms3d import affines, euler
 from live_plot_client import LivePlotClient
+import time
 
 class A1ArmInterface:
     def __init__(
@@ -16,9 +15,7 @@ class A1ArmInterface:
         kd: List[float] = [40, 40, 40, 1, 1, 1],
         urdf_path: str = "",
     ):
-        print("init Arm interface")
         self.urdf_path = urdf_path
-        self.joint_info = self.parse_urdf(urdf_path)
 
         self.pub = rospy.Publisher(
             "/arm_joint_command_host", arm_control, queue_size=10
@@ -39,9 +36,13 @@ class A1ArmInterface:
         self.running = False
         self.thread = None
 
+        self.count = 0
+        self.start_time = time.perf_counter()
+
         # Joint state variables
-        self.joint_positions = [0.0] * 6
-        self.joint_velocities = [0.0] * 6
+        self.joint_positions = torch.zeros(6)
+        # self.joint_positions = torch.tensor([0.0, 0.2, -0.3, 0.0, 0.0, 0.0])
+        self.joint_velocities = torch.zeros(6)
         self.joint_state_lock = threading.Lock()
         self.arm_control_msg_lock = threading.Lock()
 
@@ -50,42 +51,21 @@ class A1ArmInterface:
             "/joint_states_host", JointState, self._joint_state_callback
         )
 
-    def parse_urdf(self, urdf_path: str):
-        tree = ET.parse(urdf_path)
-        root = tree.getroot()
-        joint_info = {}
-
-        for joint in root.findall(".//joint[@type='revolute']"):
-            name = joint.attrib["name"]
-            origin = joint.find("origin")
-            axis = joint.find("axis")
-
-            if origin is not None and axis is not None:
-                xyz = [float(x) for x in origin.attrib["xyz"].split()]
-                rpy = [float(r) for r in origin.attrib["rpy"].split()]
-                axis_xyz = [float(a) for a in axis.attrib["xyz"].split()]
-
-                joint_info[name] = {"xyz": xyz, "rpy": rpy, "axis": axis_xyz}
-
-        return joint_info
-
     def _joint_state_callback(self, msg: JointState):
         with self.joint_state_lock:
+            self.count += 1
             # Assuming the first 6 joints are the arm joints
-            self.joint_positions = list(msg.position[:6])
-            self.joint_velocities = list(msg.velocity[:6])
+            self.joint_positions[:6] = msg.position[:6]
+            self.joint_velocities[:6] = msg.velocity[:6]
             
             if self.wait_init:
-                # Set initial joint positions to the current joint positions
-                self.arm_control_msg.p_des = self.joint_positions.copy()
+                self.arm_control_msg.p_des = self.joint_positions.tolist()
+                self.start_time = time.perf_counter()
                 self.wait_init = False
-        # print(self.joint_positions[:3])
-        # self.plot.send_data(self.joint_positions[:3])
 
     def start(self):
         if not self.running:
             self.running = True
-            # self.wait_init = True
             self.thread = threading.Thread(target=self._control_loop)
             self.thread.start()
 
@@ -99,7 +79,7 @@ class A1ArmInterface:
     def _control_loop(self):
         while self.running:
             if self.wait_init:
-                print("Waiting for initial joint positions...")
+                pass
             else:
                 with self.arm_control_msg_lock:
                     # print("p_des", np.array(self.arm_control_msg.p_des))
@@ -108,99 +88,26 @@ class A1ArmInterface:
                     self.pub.publish(self.arm_control_msg)
             self.rate.sleep()
 
-    def set_targets(self, positions: List[float], velocities: List[float]):
+    def set_targets(self, positions: torch.Tensor, velocities: torch.Tensor):
         if self.wait_init:
-            print("Waiting for initial joint positions...")
             return
-        if len(positions) != 6 or len(velocities) != 6:
+        if positions.size(0) != 6 or velocities.size(0) != 6:
             raise ValueError("Both positions and velocities must have 6 elements")
         with self.arm_control_msg_lock:
-            self.arm_control_msg.p_des = positions
-            self.arm_control_msg.v_des = velocities
+            self.arm_control_msg.p_des = positions.tolist()
+            self.arm_control_msg.v_des = velocities.tolist()
 
-    def set_feed_forward_torques(self, torques: List[float]):
-        if len(torques) != 6:
+    def set_feed_forward_torques(self, torques: torch.Tensor):
+        if torques.size(0) != 6:
             raise ValueError("Torques must have 6 elements")
+        self.arm_control_msg.t_ff = torques.tolist()
 
-        self.arm_control_msg.t_ff = torques
-
-    def get_joint_states(self) -> Tuple[List[float], List[float]]:
+    def get_joint_states(self) -> Tuple[torch.Tensor, torch.Tensor]:
         with self.joint_state_lock:
-            return self.joint_positions, self.joint_velocities
-
-    def get_forward_kinematics(self) -> Tuple[List[float], List[float], List[float]]:
-        """
-        Compute forward kinematics and return the end-effector pose and linear velocity.
-
-        Returns:
-            Tuple[List[float], List[float], List[float]]: Translation [x, y, z],
-            orientation [roll, pitch, yaw], and linear velocity [vx, vy, vz]
-        """
-        T = np.eye(4)
-        positions = []
-        axes = []
-        joint_types = []
-
-        for joint_name, joint_angle in zip(
-            self.joint_info.keys(), self.joint_positions
-        ):
-            joint = self.joint_info[joint_name]
-
-            # Create transformation matrix for joint
-            R = euler.euler2mat(*joint["rpy"])
-            t = joint["xyz"]
-            T_joint = affines.compose(t, R, np.ones(3))
-
-            # Apply joint rotation
-            axis = joint["axis"]
-            R_joint = euler.axangle2mat(axis, joint_angle)
-            T_rot = affines.compose([0, 0, 0], R_joint, np.ones(3))
-
-            # Combine transformations
-            T = T.dot(T_joint).dot(T_rot)
-
-            # Store the joint type (assuming 'revolute' or 'prismatic')
-            joint_type = joint.get('type', 'revolute')
-            joint_types.append(joint_type)
-
-            # Store the position of the joint (origin)
-            o_i = T[:3, 3]
-            positions.append(o_i)
-
-            # Compute the joint axis in the base frame
-            z_i = T[:3, :3].dot(axis)
-            axes.append(z_i)
-
-        # Extract final translation and orientation
-        translation = T[:3, 3]
-        orientation = list(euler.mat2euler(T[:3, :3]))
-
-        # Compute the Jacobian matrix
-        n = len(self.joint_positions)
-        Jv = np.zeros((3, n))
-
-        o_n = translation  # End-effector position
-
-        for i in range(n):
-            z_i = axes[i]
-            o_i = positions[i]
-
-            if joint_types[i] == 'revolute':
-                Jv[:, i] = np.cross(z_i, o_n - o_i)
-            elif joint_types[i] == 'prismatic':
-                Jv[:, i] = z_i
-
-        # Compute linear velocity of the end-effector
-        q_dot = np.array(self.joint_velocities)
-        linear_velocity = Jv.dot(q_dot)
-
-        return np.array(translation), np.array(orientation), np.array(linear_velocity)
-        
-
+            return self.joint_positions.clone(), self.joint_velocities.clone()
 
 if __name__ == "__main__":
     # set print precision
-    np.set_printoptions(precision=3, suppress=True)
     try:
         rospy.init_node("a1_arm_interface", anonymous=True)
         arm_interface = A1ArmInterface(
@@ -208,11 +115,7 @@ if __name__ == "__main__":
             kp=[0, 0, 0, 0, 0, 0],
             # kd=[2, 2, 2, 1, 1, 1],
             kd=[40, 40, 40, 1, 1, 1],
-            urdf_path="/home/unitree/A1SDKARM/install/share/mobiman/urdf/A1/urdf/A1_URDF_0607_0028.urdf",
-            # urdf_path="/home/axell/桌面/A1_SDK/install/share/mobiman/urdf/A1/urdf/A1_URDF_0607_0028.urdf"
         )
-        # nkp = np.array([40, 40, 40, 20, 20, 20])
-        # nkd = np.array([2, 2, 2, 1, 1, 1])
         arm_interface.start()
 
         freq = 500
@@ -220,14 +123,10 @@ if __name__ == "__main__":
         # Example usage
         steps = freq * 100000
         for step in range(steps):
-            print(arm_interface.get_forward_kinematics()[0])
-            print(arm_interface.joint_positions)
             positions = [
                 # 1.0 * np.sin(2 * np.pi * step / steps),
                 0,
                 0.8 * (1 - np.cos(2 * np.pi * step / steps)),
-                # 0,
-                # 0,
                 -0.6,
                 0,
                 0,
