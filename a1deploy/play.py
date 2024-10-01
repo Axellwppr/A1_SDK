@@ -1,4 +1,5 @@
 from a1_interface import A1ArmInterface
+from collections import deque
 from command_manager import KeyboardCommandManager
 from live_plot_client import LivePlotClient
 from setproctitle import setproctitle
@@ -6,6 +7,7 @@ from tensordict import TensorDict
 from torchrl.envs.utils import set_exploration_type, ExplorationType
 from typing import Tuple
 import argparse
+import gc
 import itertools
 import pytorch_kinematics as pk
 import rospy
@@ -22,10 +24,16 @@ except NameError:
 
 class Arm:
     def __init__(
-        self, dt=0.02, prev_steps=3, arm=None, command_manager=None, urdf_path=""
+        self,
+        dt=0.02,
+        prev_steps=3,
+        arm=None,
+        command_manager=None,
+        urdf_path="",
+        debug=True,
     ):
         print("init Arm")
-        self.default_joint_pos = torch.tensor([0.0, 0.2, -0.3, 0.0, 0.0, 0.0])
+        self.default_joint_pos = torch.tensor([0.0, 1.0, -1.0, 0.0, 0.0, 0.0])
         self.chain = pk.build_serial_chain_from_urdf(
             open(urdf_path, "rb").read(), "arm_seg6"
         )
@@ -40,13 +48,15 @@ class Arm:
         self.obs = torch.zeros(25)
         self.step_count = 0
         self._arm = arm
-        # self._arm.start()
         self.command_manager = command_manager
-        # self.plot = LivePlotClient(zmq_addr="tcp://127.0.0.1:5555")
+        self.debug = debug
 
-        # while self._arm.wait_init:
-        #     print("waiting for arm to be ready")
-        #     time.sleep(1)
+        # self.plot = LivePlotClient(zmq_addr="tcp://127.0.0.1:5555")
+        if not self.debug:
+            self._arm.start()
+            while self._arm.wait_init:
+                print("waiting for arm to be ready")
+                time.sleep(1)
 
     def close(self):
         self._arm.stop()
@@ -68,10 +78,11 @@ class Arm:
         target[:5].add_(self.last_action * 0.5).clip_(-torch.pi, torch.pi)
         target.sub_(self.pos).clip_(-0.2, 0.2).add_(self.pos)
 
-        self._arm.set_targets(
-            target.tolist(),
-            [0, 0, 0, 0, 0, 0],
-        )
+        if not self.debug:
+            self._arm.set_targets(
+                target,
+                torch.zeros(6),
+            )
 
     @profile
     def compute_obs(self) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -80,6 +91,7 @@ class Arm:
         self.obs[:5] = self.pos[:5]
         self.obs[5:10] = self.vel[:5]
         self.obs[10:25] = self.prev_actions.flatten()
+        # print("now_pos", self.pos)
         return self.command, self.obs
 
     @profile
@@ -99,8 +111,14 @@ def main():
     rospy.init_node("a1_arm_interface", anonymous=True)
     setproctitle("play_a1")
 
-    path = "policy-a1-427.pt"
-    policy = torch.load(path, weights_only=False)
+    path = "policy-10-01_15-59.pt"
+    # path = "policy-a1-427.pt"
+    policy = torch.load(path, weights_only=False, map_location=torch.device("cpu"))
+    # po = TensorDict(policy)
+
+    # print(policy)
+    # breakpoint()
+    # return
     policy.module[0].set_missing_tolerance(True)
     torch.set_grad_enabled(False)
 
@@ -127,10 +145,13 @@ def main():
                 [],
             ).unsqueeze(0)
 
-            for i in itertools.count():
-                if i > 500:
-                    break
+            # 初始化一个 deque 用于存储最近的 100 次循环的 elapsed 时间
+            elapsed_times = deque(maxlen=100)
+
+            for i in itertools.count(1):  # 从 1 开始计数，方便后续的模运算
                 start = time.perf_counter()
+
+                # 循环体
                 cmd, obs = robot.compute_obs()
                 td["next", "policy"] = obs.unsqueeze(0)
                 td["next", "command"] = cmd.unsqueeze(0)
@@ -140,10 +161,32 @@ def main():
                 policy(td)
                 action = td["action"][0]
 
+                # 执行动作
                 robot.take_action(action)
-                # print("action", action)
-                # print("time cost", time.perf_counter() - start)
-                time.sleep(max(0, dt - (time.perf_counter() - start)))
+
+                # 手动触发垃圾回收
+                # gc.collect()
+
+                # 计算本次循环的耗时
+                end = time.perf_counter()
+                elapsed = end - start
+                elapsed_times.append(elapsed)
+
+                if i % 400 == 0:
+                    avg_elapsed = sum(elapsed_times) / len(elapsed_times)
+                    min_elapsed = min(elapsed_times)
+                    max_elapsed = max(elapsed_times)
+                    print(
+                        f"Iteration {i}: Last 100 loops - Avg: {avg_elapsed:.6f}s, Min: {min_elapsed:.6f}s, Max: {max_elapsed:.6f}s"
+                    )
+
+                if i % 100 == 0:
+                    print("now_pos", robot.ee_pos, "pos_diff", cmd[:3])
+
+                # 维持循环时间
+                elapsed_total = time.perf_counter() - start
+                sleep_time = max(0, dt - elapsed_total)
+                time.sleep(sleep_time)
 
     except KeyboardInterrupt:
         robot.close()

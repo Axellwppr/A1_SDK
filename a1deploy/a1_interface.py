@@ -56,8 +56,8 @@ class A1ArmInterface:
         with self.joint_state_lock:
             self.count += 1
             # Assuming the first 6 joints are the arm joints
-            self.joint_positions[:6] = msg.position[:6]
-            self.joint_velocities[:6] = msg.velocity[:6]
+            self.joint_positions[:6] = torch.as_tensor(msg.position[:6])
+            self.joint_velocities[:6] = torch.as_tensor(msg.velocity[:6])
 
             if self.wait_init:
                 self.arm_control_msg.p_des = self.joint_positions.tolist()

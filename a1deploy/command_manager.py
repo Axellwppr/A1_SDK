@@ -15,8 +15,9 @@ class KeyboardCommandManager:
         self.command_setpoint_pos_ee_b = torch.tensor([0.2, 0.0, 0.5])
         self.command_setpoint_pos_ee_b_max = torch.tensor([0.6, 0.2, 0.6])
         self.command_setpoint_pos_ee_b_min = torch.tensor([0.2, -0.2, 0.2])
-        self.command_kp = torch.tensor([40.0, 40.0, 4 + 0.0])  # 默认值
+        self.command_kp = torch.tensor([40.0, 40.0, 40.0])  # 默认值
         self.command_kd = 2 * torch.sqrt(self.command_kp)
+        self.command_kp_range = (30, 100)
         self.compliant_ee = False
         self.apply_scaling = apply_scaling
         self.mass = 1.0
@@ -76,33 +77,42 @@ class KeyboardCommandManager:
             self.command_setpoint_pos_ee_b[2] -= self.step_size
         elif key == "k":
             self.command_kp += 10
-            self.command_kd = 2 * np.sqrt(self.command_kp)
+            self.command_kd = 2 * torch.sqrt(self.command_kp)
         elif key == "l":
             self.command_kp -= 10
-            self.command_kd = 2 * np.sqrt(self.command_kp)
+            self.command_kd = 2 * torch.sqrt(self.command_kp)
+        elif key == "r":
+            self.reset()
+            print("command reset")
         elif key == "c":
             self.compliant_ee = not self.compliant_ee
             print(f"Compliant EE 设置为 {self.compliant_ee}")
 
-    def reset(self):
-        self.command_setpoint_pos_ee_b.zero_()
-        self.command_kp = torch.tensor([100.0, 100.0, 100.0])
-
-    # @torch.compile
-    def update(self, ee_pos: torch.Tensor, ee_vel: torch.Tensor) -> torch.Tensor:
         # 将值限制在合理范围内
         self.command_setpoint_pos_ee_b.clip_(
             self.command_setpoint_pos_ee_b_min, self.command_setpoint_pos_ee_b_max
         )
 
         # 确保 command_kp 在限制范围内
-        self.command_kp.clip_(50, 200)
+        self.command_kp.clip_(*self.command_kp_range)
         self.command_kd = 2 * torch.sqrt(self.command_kp)
 
-        # ee_pos, ee_ori, ee_vel = self.arm.get_forward_kinematics()
-        # ee_pos, ee_ori, ee_vel = np.array([0.0, 0.0, 0.0]), np.array([1.0, 1.0, 1.0]), np.array([1.0, 1.0, 1.0])
+        if key is not None:
+            print(
+                "set ee_pos=",
+                self.command_setpoint_pos_ee_b,
+                "kp=",
+                self.command_kp,
+            )
 
+    def reset(self):
+        self.command_setpoint_pos_ee_b = torch.tensor([0.2, 0.0, 0.5])
+        self.command_kp = torch.tensor([40.0, 40.0, 40.0])
+
+    # @torch.compile
+    def update(self, ee_pos: torch.Tensor, ee_vel: torch.Tensor) -> torch.Tensor:
         self.command[0:3] = self.command_setpoint_pos_ee_b - ee_pos
+
         self.command[3:6] = self.command_kp
         self.command[6:9] = self.command_kd
         self.command[9] = self.mass
@@ -119,8 +129,93 @@ class KeyboardCommandManager:
         self.input_thread.join()
 
 
+class RandomSampleCommandManager:
+    def __init__(self, apply_scaling=True):
+        self.apply_scaling = apply_scaling
+
+        # 硬编码的采样范围和默认值
+        self.setpoint_x_range = (0.2, 0.5)
+        self.setpoint_y_range = (-0.2, 0.2)
+        self.setpoint_z_range = (0.2, 0.6)
+        self.kp_range = (30.0, 100.0)
+        self.damping_ratio_range = (0.5, 1.5)
+        self.virtual_mass_range = (0.8, 1.2)
+        self.compliant_ratio = -0.0
+        self.default_mass_ee = 1.0
+
+        # 初始化命令参数
+        self.command = torch.zeros(10)
+        self.command_setpoint_pos_ee_b = torch.tensor([0.2, 0.0, 0.5])
+        self.command_kp = torch.tensor([40.0, 40.0, 40.0])
+        self.command_kd = 2 * torch.sqrt(self.command_kp)
+        self.compliant_ee = False
+        self.damping_ratio = torch.tensor([1.0])
+        self.mass = self.default_mass_ee
+
+        self.resample_prob = 0.005
+
+        # 随机生成初始命令
+        self.sample_command()
+
+    def sample_command(self):
+        # 随机采样末端执行器位置
+        self.command_setpoint_pos_ee_b[0].uniform_(*self.setpoint_x_range)
+        self.command_setpoint_pos_ee_b[1].uniform_(*self.setpoint_y_range)
+        self.command_setpoint_pos_ee_b[2].uniform_(*self.setpoint_z_range)
+        # 采样 Kp
+        self.command_kp.uniform_(*self.kp_range)
+
+        # 决定是否启用顺应性
+        self.compliant_ee = torch.rand(1).item() < self.compliant_ratio
+
+        # 基于 Kp 和阻尼比采样 Kd
+        self.damping_ratio.uniform_(*self.damping_ratio_range)
+        self.command_kd = 2.0 * torch.sqrt(self.command_kp) * self.damping_ratio
+
+        # 采样虚拟质量
+        self.mass = (
+            torch.empty(1).uniform_(*self.virtual_mass_range).item()
+            * self.default_mass_ee
+        )
+
+    def update(self, ee_pos: torch.Tensor, ee_vel: torch.Tensor) -> torch.Tensor:
+        # 随机重新采样命令
+        print(torch.rand(1).item())
+        if torch.rand(1).item() < self.resample_prob:
+            self.sample_command()
+        # 更新命令向量
+        self.command[0:3] = self.command_setpoint_pos_ee_b - ee_pos
+        self.command[3:6] = self.command_kp
+        self.command[6:9] = self.command_kd
+        self.command[9] = self.mass
+
+        if self.compliant_ee:
+            self.command[0:6] = 0
+
+        if self.apply_scaling:
+            self.command[3:6] *= self.command[0:3]
+            self.command[6:9] *= -ee_vel
+
+        return self.command
+
+    def reset(self):
+        # 重置命令参数到默认值
+        self.command_setpoint_pos_ee_b = torch.tensor([0.2, 0.0, 0.5])
+        self.command_kp = torch.tensor([40.0, 40.0, 40.0])
+        self.command_kd = 2 * torch.sqrt(self.command_kp)
+        self.compliant_ee = False
+        self.mass = self.default_mass_ee
+
+    def __str__(self):
+        return (
+            f"Setpoint Position: {self.command_setpoint_pos_ee_b.tolist()}, "
+            f"Kp: {self.command_kp.tolist()}, Kd: {self.command_kd.tolist()}, "
+            f"Compliant EE: {self.compliant_ee}, Mass: {self.mass}"
+        )
+
+
 if __name__ == "__main__":
-    CommandManager = KeyboardCommandManager()
+    CommandManager = RandomSampleCommandManager()
     while True:
-        print(CommandManager.update())
+        print(CommandManager.update(torch.zeros(3), torch.zeros(3)))
         time.sleep(0.02)
