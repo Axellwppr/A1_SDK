@@ -14,6 +14,7 @@ class LivePlotServer(QtCore.QObject):
         super().__init__()
         self.app = QtWidgets.QApplication(sys.argv)
         self.win = pg.GraphicsLayoutWidget(show=True, title="Real-Time Plotting")
+        self.win.resize(800, 600)  # 可选：调整窗口大小
         self.plots = []
         self.curves = []
         self.data = []
@@ -38,6 +39,7 @@ class LivePlotServer(QtCore.QObject):
         """Receive data in a separate thread and emit it to the main thread."""
         while True:
             data = self.socket.recv_pyobj()  # Receive data from ZeroMQ
+            # print(data)
             self.data_received.emit(
                 data
             )  # Emit the data as a signal to the main thread
@@ -53,9 +55,11 @@ class LivePlotServer(QtCore.QObject):
             for i in range(n):
                 p = self.win.addPlot(row=i, col=0)
 
-                # 固定Y轴范围 (例如设置为 0 到 1)
-                p.setYRange(-4, 4)  # 调整上下界范围
-                p.setXRange(0, 500)  # 假设你希望在X轴上也固定范围
+                # 启用网格线
+                p.showGrid(x=True, y=True)
+
+                # 可选：如果希望X轴范围固定，可以保留以下两行，否则移除
+                # p.setXRange(0, 500)  # 假设你希望在X轴上也固定范围
 
                 # 创建曲线，设置线条颜色和粗细
                 c = p.plot(pen=pg.mkPen(width=2))  # 设置线条宽度为2像素
@@ -77,6 +81,13 @@ class LivePlotServer(QtCore.QObject):
         """Update the curves with the latest data."""
         for i, curve in enumerate(self.curves):
             curve.setData(self.data[i])
+            # 自适应Y轴范围
+            if self.data[i]:
+                min_y = min(self.data[i])
+                max_y = max(self.data[i])
+                # 添加一些填充以避免数据紧贴边界
+                padding = (max_y - min_y) * 0.1 if max_y != min_y else 1
+                self.plots[i].setYRange(min_y - padding, max_y + padding)
 
     def run(self):
         self.app.exec_()

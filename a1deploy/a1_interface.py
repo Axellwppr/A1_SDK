@@ -6,6 +6,7 @@ from typing import List, Tuple
 import threading
 from live_plot_client import LivePlotClient
 import time
+import math
 
 
 class A1ArmInterface:
@@ -83,7 +84,7 @@ class A1ArmInterface:
                 pass
             else:
                 with self.arm_control_msg_lock:
-                    # print("p_des", np.array(self.arm_control_msg.p_des))
+                    # print("p_des", self.arm_control_msg.p_des)
                     self.arm_control_msg.header.seq += 1
                     self.arm_control_msg.header.stamp = rospy.Time.now()
                     self.pub.publish(self.arm_control_msg)
@@ -97,6 +98,7 @@ class A1ArmInterface:
         with self.arm_control_msg_lock:
             self.arm_control_msg.p_des = positions.tolist()
             self.arm_control_msg.v_des = velocities.tolist()
+            print(self.arm_control_msg.p_des)
 
     def set_feed_forward_torques(self, torques: torch.Tensor):
         if torques.size(0) != 6:
@@ -113,35 +115,35 @@ if __name__ == "__main__":
     try:
         rospy.init_node("a1_arm_interface", anonymous=True)
         arm_interface = A1ArmInterface(
-            # kp=[60, 60, 60, 20, 20, 20],
+            # kp=[80, 80, 80, 30, 30, 30],
             kp=[0, 0, 0, 0, 0, 0],
-            # kd=[2, 2, 2, 1, 1, 1],
-            kd=[40, 40, 40, 1, 1, 1],
+            kd=[2, 2, 2, 1, 1, 1],
+            # kd=[40, 40, 40, 1, 1, 1],
         )
         arm_interface.start()
-
+        while arm_interface.wait_init:
+            print("waiting for arm to be ready")
+            time.sleep(1)
         freq = 500
         rate = rospy.Rate(freq)
         # Example usage
-        steps = freq * 100000
+        steps = freq * 10
         for step in range(steps):
-            positions = [
-                # 1.0 * np.sin(2 * np.pi * step / steps),
-                0,
-                0.8 * (1 - np.cos(2 * np.pi * step / steps)),
-                -0.6,
-                0,
-                0,
-                0,
-            ]
-            velocities = [
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-            ]  # You may want to calculate proper velocities
+            positions = torch.tensor(
+                [
+                    # 1.0 * np.sin(2 * np.pi * step / steps),
+                    0,
+                    # 0.3,
+                    0.8 * (1 - math.cos(2 * torch.pi * step / steps)),
+                    -0.6,
+                    0,
+                    0,
+                    0,
+                ]
+            )
+            velocities = torch.tensor(
+                [0, 0, 0, 0, 0, 0]
+            )  # You may want to calculate proper velocities
 
             # if step > 100:
             # positions = [0.0, 0.5, 0, 0., 0., 0.0]
@@ -151,12 +153,13 @@ if __name__ == "__main__":
             # torque = (nkp * (np.array(positions) - np.array(current_positions)) + nkd * (np.array(velocities) - np.array(current_velocities))).clip(-20, 20)
             # torque[-3:] = 0
 
-            # arm_interface.set_targets(positions, velocities)
+            arm_interface.set_targets(positions, velocities)
             # arm_interface.set_feed_forward_torques(torque.tolist())
             # Read and print current joint states
 
             # print(f"Current positions: {np.array(current_positions)}")
             # print(f"Current positions: {arm_interface.get_forward_kinematics()}")
+            print(f"Current positions: {arm_interface.get_joint_states()}")
             rate.sleep()  # Sleep for 100ms between updates
 
         arm_interface.stop()

@@ -1,6 +1,6 @@
 from a1_interface import A1ArmInterface
 from collections import deque
-from command_manager import KeyboardCommandManager
+from command_manager import KeyboardCommandManager, RandomSampleCommandManager
 from live_plot_client import LivePlotClient
 from setproctitle import setproctitle
 from tensordict import TensorDict
@@ -17,7 +17,7 @@ import torch
 try:
     profile
 except NameError:
-    # 如果 @profile 未定义，创建一个空的装饰器
+
     def profile(func):
         return func
 
@@ -31,27 +31,34 @@ class Arm:
         command_manager=None,
         urdf_path="",
         debug=True,
+        default_joint_pos=torch.tensor([0.0, 1.0, -1.0, 0.0, 0.0, 0.0]),
+        action_dim=5,
+        use_vel=True,
     ):
         print("init Arm")
-        self.default_joint_pos = torch.tensor([0.0, 1.0, -1.0, 0.0, 0.0, 0.0])
+        self.default_joint_pos = default_joint_pos
         self.chain = pk.build_serial_chain_from_urdf(
             open(urdf_path, "rb").read(), "arm_seg6"
         )
         self.dt = dt
+        self.action_dim = action_dim
+        self.use_vel = int(use_vel)
         self.pos = torch.zeros(6)
         self.vel = torch.zeros(6)
+        self.now_pos = torch.zeros(6)
+        self.now_vel = torch.zeros(6)
         self.ee_pos = torch.zeros(3)
         self.ee_vel = torch.zeros(3)
-        self.prev_actions = torch.zeros((5, prev_steps))
-        self.last_action = torch.zeros(5)
+        self.prev_actions = torch.zeros((self.action_dim, prev_steps))
+        self.last_action = torch.zeros(self.action_dim)
         self.command = torch.zeros(10)
-        self.obs = torch.zeros(25)
+        self.obs = torch.zeros(5 + 5 * self.use_vel + prev_steps * self.action_dim)
         self.step_count = 0
         self._arm = arm
         self.command_manager = command_manager
         self.debug = debug
 
-        # self.plot = LivePlotClient(zmq_addr="tcp://127.0.0.1:5555")
+        self.plot = LivePlotClient(zmq_addr="tcp://127.0.0.1:5555")
         if not self.debug:
             self._arm.start()
             while self._arm.wait_init:
@@ -72,12 +79,16 @@ class Arm:
 
         self.prev_actions[:, 1:] = self.prev_actions[:, :-1]
         self.prev_actions[:, 0] = action
-        self.last_action.mul_(0.8).add_(action * 0.2)
+        self.last_action.mul_(0.2).add_(action * 0.8)
 
         target = self.default_joint_pos.clone()
-        target[:5].add_(self.last_action * 0.5).clip_(-torch.pi, torch.pi)
-        target.sub_(self.pos).clip_(-0.2, 0.2).add_(self.pos)
+        target[: self.action_dim].add_(self.last_action * 0.5).clip_(
+            -torch.pi, torch.pi
+        )
+        # print(target - self.pos)
 
+        target.sub_(self.pos).clip_(-0.3, 0.3).add_(self.pos)
+        print(target)
         if not self.debug:
             self._arm.set_targets(
                 target,
@@ -89,14 +100,19 @@ class Arm:
         self.update_fk()
         self.command = self.command_manager.update(self.ee_pos, self.ee_vel)
         self.obs[:5] = self.pos[:5]
-        self.obs[5:10] = self.vel[:5]
-        self.obs[10:25] = self.prev_actions.flatten()
+        if self.use_vel:
+            self.obs[5:10] = self.vel[:5]
+            self.obs[10:] = self.prev_actions.flatten()
+        else:
+            self.obs[5:] = self.prev_actions.flatten()
         # print("now_pos", self.pos)
         return self.command, self.obs
 
     @profile
     def update_fk(self):
-        self.pos, self.vel = self._arm.get_joint_states()
+        self.now_pos, self.now_vel = self._arm.get_joint_states()
+        self.pos.mul_(0.3).add_(self.now_pos * 0.7)
+        self.vel.mul_(0.3).add_(self.now_vel * 0.7)
         ret = self.chain.forward_kinematics(self.pos, end_only=True)
         self.J = self.chain.jacobian(self.pos)[0, :3]
 
@@ -111,7 +127,8 @@ def main():
     rospy.init_node("a1_arm_interface", anonymous=True)
     setproctitle("play_a1")
 
-    path = "policy-10-01_15-59.pt"
+    # path = "policy-10-18_23-14.pt"
+    path = "policy-10-23_20-34.pt"
     # path = "policy-a1-427.pt"
     policy = torch.load(path, weights_only=False, map_location=torch.device("cpu"))
     # po = TensorDict(policy)
@@ -129,7 +146,11 @@ def main():
             dt=dt,
             arm=arm,
             command_manager=KeyboardCommandManager(),
+            # command_manager=RandomSampleCommandManager(),
             urdf_path="/home/axell/桌面/A1_SDK/install/share/mobiman/urdf/A1/urdf/A1_URDF_0607_0028.urdf",
+            debug=False,
+            action_dim=5,
+            use_vel=False,
         )
         robot.reset()
         cmd, obs = robot.compute_obs()
@@ -145,13 +166,11 @@ def main():
                 [],
             ).unsqueeze(0)
 
-            # 初始化一个 deque 用于存储最近的 100 次循环的 elapsed 时间
             elapsed_times = deque(maxlen=100)
 
-            for i in itertools.count(1):  # 从 1 开始计数，方便后续的模运算
+            for i in itertools.count(1):
                 start = time.perf_counter()
 
-                # 循环体
                 cmd, obs = robot.compute_obs()
                 td["next", "policy"] = obs.unsqueeze(0)
                 td["next", "command"] = cmd.unsqueeze(0)
@@ -161,18 +180,21 @@ def main():
                 policy(td)
                 action = td["action"][0]
 
-                # 执行动作
-                robot.take_action(action)
+                # print(action)
+                # robot.plot.send(td["ext_rec"][0, :3].tolist())
+                robot.plot.send(action.tolist())
 
-                # 手动触发垃圾回收
+                # breakpoint(
+                robot.take_action(action)
+                # print(td["ext_rec"][0])
+
                 # gc.collect()
 
-                # 计算本次循环的耗时
                 end = time.perf_counter()
                 elapsed = end - start
                 elapsed_times.append(elapsed)
 
-                if i % 400 == 0:
+                if i % 100 == 0:
                     avg_elapsed = sum(elapsed_times) / len(elapsed_times)
                     min_elapsed = min(elapsed_times)
                     max_elapsed = max(elapsed_times)
@@ -183,7 +205,6 @@ def main():
                 if i % 100 == 0:
                     print("now_pos", robot.ee_pos, "pos_diff", cmd[:3])
 
-                # 维持循环时间
                 elapsed_total = time.perf_counter() - start
                 sleep_time = max(0, dt - elapsed_total)
                 time.sleep(sleep_time)

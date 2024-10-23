@@ -11,13 +11,16 @@ class KeyboardCommandManager:
         self.step_size = step_size
 
         self.command = torch.zeros(10)
-
-        self.command_setpoint_pos_ee_b = torch.tensor([0.2, 0.0, 0.5])
-        self.command_setpoint_pos_ee_b_max = torch.tensor([0.6, 0.2, 0.6])
-        self.command_setpoint_pos_ee_b_min = torch.tensor([0.2, -0.2, 0.2])
-        self.command_kp = torch.tensor([40.0, 40.0, 40.0])  # 默认值
+        self.default_pos = torch.tensor([0.2, 0.0, 0.5])
+        self.command_setpoint_pos_ee_b = self.default_pos
+        self.command_setpoint_pos_ee_b_max = torch.tensor([0.7, 0.3, 0.7])
+        self.command_setpoint_pos_ee_b_min = torch.tensor([0.2, -0.3, 0.35])
+        self.setpoint_diff_min = torch.tensor([-0.1, -0.1, -0.1])
+        self.setpoint_diff_max = torch.tensor([0.1, 0.1, 0.1])
+        self.default_kp = torch.tensor([40.0, 40.0, 40.0])
+        self.command_kp = self.default_kp  # 默认值
         self.command_kd = 2 * torch.sqrt(self.command_kp)
-        self.command_kp_range = (30, 100)
+        self.command_kp_range = (30, 60)
         self.compliant_ee = False
         self.apply_scaling = apply_scaling
         self.mass = 1.0
@@ -95,7 +98,7 @@ class KeyboardCommandManager:
 
         # 确保 command_kp 在限制范围内
         self.command_kp.clip_(*self.command_kp_range)
-        self.command_kd = 2 * torch.sqrt(self.command_kp)
+        self.command_kd = torch.sqrt(self.command_kp) * 2
 
         if key is not None:
             print(
@@ -106,12 +109,24 @@ class KeyboardCommandManager:
             )
 
     def reset(self):
-        self.command_setpoint_pos_ee_b = torch.tensor([0.2, 0.0, 0.5])
-        self.command_kp = torch.tensor([40.0, 40.0, 40.0])
+        self.command_setpoint_pos_ee_b = self.default_pos
+        self.command_kp = self.default_kp
+        self.command_kd = torch.sqrt(self.command_kp) * 2
 
     # @torch.compile
     def update(self, ee_pos: torch.Tensor, ee_vel: torch.Tensor) -> torch.Tensor:
-        self.command[0:3] = self.command_setpoint_pos_ee_b - ee_pos
+        # check if ee_pos out of range
+        if (ee_pos < self.command_setpoint_pos_ee_b_min).any() or (
+            ee_pos > self.command_setpoint_pos_ee_b_max
+        ).any():
+            pass
+
+        # real_command = (self.command_setpoint_pos_ee_b - ee_pos).clamp(
+        #     self.setpoint_diff_min, self.setpoint_diff_max
+        # )
+        real_command = self.command_setpoint_pos_ee_b - ee_pos
+        # print("ee_pos out of range!", ee_pos)
+        self.command[0:3] = real_command
 
         self.command[3:6] = self.command_kp
         self.command[6:9] = self.command_kd
@@ -135,8 +150,8 @@ class RandomSampleCommandManager:
 
         # 硬编码的采样范围和默认值
         self.setpoint_x_range = (0.2, 0.5)
-        self.setpoint_y_range = (-0.2, 0.2)
-        self.setpoint_z_range = (0.2, 0.6)
+        self.setpoint_y_range = (-0.18, 0.18)
+        self.setpoint_z_range = (0.3, 0.6)
         self.kp_range = (30.0, 100.0)
         self.damping_ratio_range = (0.5, 1.5)
         self.virtual_mass_range = (0.8, 1.2)
@@ -146,13 +161,13 @@ class RandomSampleCommandManager:
         # 初始化命令参数
         self.command = torch.zeros(10)
         self.command_setpoint_pos_ee_b = torch.tensor([0.2, 0.0, 0.5])
-        self.command_kp = torch.tensor([40.0, 40.0, 40.0])
+        self.command_kp = torch.tensor([60.0, 60.0, 60.0])
         self.command_kd = 2 * torch.sqrt(self.command_kp)
         self.compliant_ee = False
         self.damping_ratio = torch.tensor([1.0])
         self.mass = self.default_mass_ee
 
-        self.resample_prob = 0.005
+        self.resample_prob = 0.007
 
         # 随机生成初始命令
         self.sample_command()
@@ -180,7 +195,7 @@ class RandomSampleCommandManager:
 
     def update(self, ee_pos: torch.Tensor, ee_vel: torch.Tensor) -> torch.Tensor:
         # 随机重新采样命令
-        print(torch.rand(1).item())
+        # print(torch.rand(1).item())
         if torch.rand(1).item() < self.resample_prob:
             self.sample_command()
         # 更新命令向量
@@ -201,7 +216,7 @@ class RandomSampleCommandManager:
     def reset(self):
         # 重置命令参数到默认值
         self.command_setpoint_pos_ee_b = torch.tensor([0.2, 0.0, 0.5])
-        self.command_kp = torch.tensor([40.0, 40.0, 40.0])
+        self.command_kp = torch.tensor([60.0, 60.0, 60.0])
         self.command_kd = 2 * torch.sqrt(self.command_kp)
         self.compliant_ee = False
         self.mass = self.default_mass_ee
