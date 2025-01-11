@@ -7,18 +7,49 @@ import math
 from time import sleep
 
 
-def wave(t: float):
-    t = t % 2
-    if t < 1:
-        return t
-    else:
-        return 2 - t
+import random
+
+
+class WaveGenerator:
+    def __init__(self, initial=0.0, min_amp=0.5, max_amp=1.5, interval=1.0):
+        self.key_points = [initial]
+        self.min_amp = min_amp
+        self.max_amp = max_amp
+        self.interval = interval
+        self.current_segment = 0
+        self.last_target = initial
+
+    def get(self, t: float) -> float:
+        # Determine the current segment based on time
+        segment = int(t // self.interval)
+
+        # Generate new key points if needed
+        while len(self.key_points) <= segment + 1:
+            # Alternate the sign
+            sign = -1 if len(self.key_points) % 2 else 1
+            # Generate a new target within the specified range
+            new_target = sign * random.uniform(self.min_amp, self.max_amp)
+            self.key_points.append(new_target)
+
+        # Get start and end points for interpolation
+        start = self.key_points[segment]
+        end = self.key_points[segment + 1]
+
+        # Calculate the progress within the current interval
+        progress = (t % self.interval) / self.interval
+
+        # Linear interpolation between start and end
+        return start + (end - start) * progress
 
 
 def main():
     rospy.init_node("a1_arm_interface", anonymous=True)
     data = []
-    n = 5
+    n = 0  # Specify the joint index you want to control
+
+    # Initialize the WaveGenerator
+    wave_gen = WaveGenerator(initial=0.0, min_amp=0.2, max_amp=1.8, interval=1.0)
+
     try:
         arm = A1ArmInterface(kp=[80, 80, 80, 30, 30, 30], kd=[2, 2, 2, 1, 1, 1])
         dt = 0.02
@@ -32,52 +63,49 @@ def main():
         )
         freq = 50
         rate = rospy.Rate(freq)
-        # Example usage
-        steps = freq * 20
-        # arm.set_targets(torch.zeros(6), torch.zeros(6))
-        sleep(0)
+        steps = freq * 20  # Run for 20 seconds
+
         for step in range(steps):
-            # print("OK")
-            t = step / freq
+            t = step / freq  # Current time in seconds
+
+            # Get the wave value for the current time
+            wave_value = wave_gen.get(t)
+
+            # Initialize positions with default values
             positions = torch.tensor(
-                [
-                    0,
-                    0.5,
-                    -0.5,
-                    0,
-                    0,
-                    0,
-                ],
+                [0, 0.5, -0.5, 0, 0, 0],
                 dtype=torch.float32,
             )
-            if n == 2:
-                positions[n] = wave(t * 2) * (-1.5) - 1.0  # 2
-            elif n == 1:
-                positions[n] = wave(t * 2) * (1.0) + 1.0  # 2
-            elif n == 0:
-                positions[n] = wave(t * 2) * 1.8 - 0.8  # 0
-            elif n == 3:
-                positions[n] = wave(t * 2) * 1.8 - 0.8  # 0
-            elif n == 4:
-                positions[n] = wave(t * 2) * 1.8 - 0.8  # 0
-            elif n == 5:
-                positions[n] = wave(t * 2) - 1.0
 
-            # positions[n] = -(math.sin(math.pi * t) * 0.5 + 1.0)  # 2
-            # positions[n] = math.sin(math.pi * t) * 0.5 + 1.0  # 1
-            # positions[n] = math.sin(2 * math.pi * t) * 0.5  # 0
-            # print(positions)
+            # Update the specified joint with the wave value
+            positions[n] = wave_value
+
+            # Set targets with scaling if needed
             arm.set_targets(positions * 0.5, torch.zeros(6, dtype=torch.float32))
-            # robot.update_fk()
-            # robot.take_action(positions[:5])
-            j_pos, j_vel = arm.get_joint_states()
+
+            # Retrieve joint positions and velocities
+            j_pos = arm.joint_pos_raw.clone()
+            j_vel = arm.joint_vel_raw.clone()
+
+            # Print current joint position
             print(j_pos)
-            robot.plot.send([j_pos[n], arm.arm_control_msg.p_des[n]])
-            data.append([j_pos[n], j_vel[n], arm.arm_control_msg.p_des[n]])
+
+            # Send data for plotting or logging
+            robot.plot.send([j_pos[n].item(), arm.arm_control_msg.p_des[n]])
+            # robot.plot.send([j_pos[n], wave_value])
+
+            # Append data for saving
+            data.append(
+                [j_pos[n].item(), j_vel[n].item(), arm.arm_control_msg.p_des[n]]
+            )
+
+            # Sleep to maintain the loop rate
             rate.sleep()
     except KeyboardInterrupt:
         robot.close()
         print("End")
+
+    # Save the collected data
     datat = torch.tensor(data)
     torch.save(datat, f"{n}.pt")
 

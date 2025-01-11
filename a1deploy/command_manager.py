@@ -7,20 +7,23 @@ import time
 
 
 class KeyboardCommandManager:
-    def __init__(self, step_size=0.01, apply_scaling=True):
+    def __init__(self, step_size=0.1, apply_scaling=True, device="cpu"):
         self.step_size = step_size
+        self.device = device
+        with torch.device(device):
+            self.command = torch.zeros(13)
+            self.default_pos = torch.tensor([0.3, 0.0, 0.4])
+            self.pose = torch.tensor([1.0, 0.0, 0.0])
+            self.command_setpoint_pos_ee_b = self.default_pos
+            self.command_setpoint_pos_ee_b_max = torch.tensor([0.8, 0.4, 0.7])
+            self.command_setpoint_pos_ee_b_min = torch.tensor([0.2, -0.4, 0.35])
+            self.setpoint_diff_min = torch.tensor([-0.1, -0.1, -0.1])
+            self.setpoint_diff_max = torch.tensor([0.1, 0.1, 0.1])
+            self.default_kp = torch.tensor([45.0, 45.0, 45.0])
+            self.command_kp = self.default_kp  # 默认值
+            self.command_kd = 2 * torch.sqrt(self.command_kp)
+            self.command_kp_range = (40, 60)
 
-        self.command = torch.zeros(10)
-        self.default_pos = torch.tensor([0.2, 0.0, 0.5])
-        self.command_setpoint_pos_ee_b = self.default_pos
-        self.command_setpoint_pos_ee_b_max = torch.tensor([0.7, 0.3, 0.7])
-        self.command_setpoint_pos_ee_b_min = torch.tensor([0.2, -0.3, 0.35])
-        self.setpoint_diff_min = torch.tensor([-0.1, -0.1, -0.1])
-        self.setpoint_diff_max = torch.tensor([0.1, 0.1, 0.1])
-        self.default_kp = torch.tensor([40.0, 40.0, 40.0])
-        self.command_kp = self.default_kp  # 默认值
-        self.command_kd = 2 * torch.sqrt(self.command_kp)
-        self.command_kp_range = (30, 60)
         self.compliant_ee = False
         self.apply_scaling = apply_scaling
         self.mass = 1.0
@@ -131,6 +134,7 @@ class KeyboardCommandManager:
         self.command[3:6] = self.command_kp
         self.command[6:9] = self.command_kd
         self.command[9] = self.mass
+        self.command[10:13] = self.pose
 
         if self.compliant_ee:
             self.command[0:6] = 0

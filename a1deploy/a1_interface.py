@@ -12,7 +12,7 @@ import math
 class A1ArmInterface:
     def __init__(
         self,
-        control_frequency: int = 1000,
+        control_frequency: int = 200,
         kp: List[float] = [40, 40, 40, 20, 20, 20],
         kd: List[float] = [40, 40, 40, 1, 1, 1],
         urdf_path: str = "",
@@ -31,9 +31,9 @@ class A1ArmInterface:
         self.arm_control_msg.header.frame_id = "world"
         self.arm_control_msg.kp = kp
         self.arm_control_msg.kd = kd
-        self.arm_control_msg.p_des = [0, 0, 0, 0, 0, 0]
-        self.arm_control_msg.v_des = [0, 0, 0, 0, 0, 0]
-        self.arm_control_msg.t_ff = [0, 0, 0, 0, 0, 0]
+        self.arm_control_msg.p_des = None
+        self.arm_control_msg.v_des = None
+        self.arm_control_msg.t_ff = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
         self.running = False
         self.thread = None
@@ -41,10 +41,12 @@ class A1ArmInterface:
         self.count = 0
         self.start_time = time.perf_counter()
 
-        # Joint state variables
-        self.joint_positions = torch.zeros(6)
-        # self.joint_positions = torch.tensor([0.0, 0.2, -0.3, 0.0, 0.0, 0.0])
-        self.joint_velocities = torch.zeros(6)
+        self.joint_efforts_raw = torch.zeros(6)
+        self.joint_pos_raw = torch.zeros(6)
+        self.joint_vel_raw = torch.zeros(6)
+
+        self.joint_pos_buffer = torch.zeros(10, 6)
+
         self.joint_state_lock = threading.Lock()
         self.arm_control_msg_lock = threading.Lock()
 
@@ -56,12 +58,20 @@ class A1ArmInterface:
     def _joint_state_callback(self, msg: JointState):
         with self.joint_state_lock:
             self.count += 1
-            # Assuming the first 6 joints are the arm joints
-            self.joint_positions[:6] = torch.as_tensor(msg.position[:6])
-            self.joint_velocities[:6] = torch.as_tensor(msg.velocity[:6])
+            # roll over the buffer
+            # print(msg)
+
+            # print(self.joint_pos_buffer)
+            self.joint_pos_raw[:6] = torch.as_tensor(msg.position[:6])
+            self.joint_pos_buffer[1:] = self.joint_pos_buffer[:-1].clone()
+            # print(self.joint_pos_buffer)
+            self.joint_pos_buffer[0, :6] = self.joint_pos_raw[:6]
+            self.joint_efforts_raw[:6] = torch.as_tensor(msg.effort[:6])
+            self.joint_vel_raw[:6] = torch.as_tensor(msg.velocity[:6])
 
             if self.wait_init:
-                self.arm_control_msg.p_des = self.joint_positions.tolist()
+                self.arm_control_msg.p_des = msg.position
+                self.arm_control_msg.v_des = [0.0] * 6
                 self.start_time = time.perf_counter()
                 self.wait_init = False
 
@@ -84,10 +94,16 @@ class A1ArmInterface:
                 pass
             else:
                 with self.arm_control_msg_lock:
-                    # print("p_des", self.arm_control_msg.p_des)
-                    self.arm_control_msg.header.seq += 1
-                    self.arm_control_msg.header.stamp = rospy.Time.now()
-                    self.pub.publish(self.arm_control_msg)
+                    if (
+                        self.arm_control_msg.p_des == None
+                        or self.arm_control_msg.v_des == None
+                    ):
+                        pass
+                    else:
+                        # print("p_des", self.arm_control_msg.p_des)
+                        self.arm_control_msg.header.seq += 1
+                        self.arm_control_msg.header.stamp = rospy.Time.now()
+                        self.pub.publish(self.arm_control_msg)
             self.rate.sleep()
 
     def set_targets(self, positions: torch.Tensor, velocities: torch.Tensor):
@@ -98,7 +114,7 @@ class A1ArmInterface:
         with self.arm_control_msg_lock:
             self.arm_control_msg.p_des = positions.tolist()
             self.arm_control_msg.v_des = velocities.tolist()
-            print(self.arm_control_msg.p_des)
+        # print(self.arm_control_msg.p_des)
 
     def set_feed_forward_torques(self, torques: torch.Tensor):
         if torques.size(0) != 6:
@@ -107,8 +123,14 @@ class A1ArmInterface:
 
     def get_joint_states(self) -> Tuple[torch.Tensor, torch.Tensor]:
         with self.joint_state_lock:
-            return self.joint_positions.clone(), self.joint_velocities.clone()
+            joint_pos = self.joint_pos_buffer.mean(dim=0)
+            joint_vel = (self.joint_pos_buffer[:5] - self.joint_pos_buffer[5:]).mean(
+                dim=0
+            ) / 0.01
+        return joint_pos, joint_vel
 
+
+import itertools
 
 if __name__ == "__main__":
     # set print precision
@@ -116,51 +138,48 @@ if __name__ == "__main__":
         rospy.init_node("a1_arm_interface", anonymous=True)
         arm_interface = A1ArmInterface(
             # kp=[80, 80, 80, 30, 30, 30],
-            kp=[0, 0, 0, 0, 0, 0],
+            kp=[80.0, 80.0, 80.0, 30.0, 30.0, 30.0],
             kd=[2, 2, 2, 1, 1, 1],
-            # kd=[40, 40, 40, 1, 1, 1],
+            # kd=[15.0, 15.0, 15.0, 1.0, 1.0, 1.0],
         )
         arm_interface.start()
         while arm_interface.wait_init:
             print("waiting for arm to be ready")
             time.sleep(1)
-        freq = 500
+        arm_interface.set_targets(
+            torch.zeros(6, dtype=torch.float32),
+            torch.zeros(6, dtype=torch.float32),
+        )
+        freq = 50
         rate = rospy.Rate(freq)
-        # Example usage
-        steps = freq * 10
-        for step in range(steps):
-            positions = torch.tensor(
+        plot = LivePlotClient(zmq_addr="tcp://127.0.0.1:5555")
+        time.sleep(2)
+
+        for iter in itertools.count():
+            t = iter / freq
+            cmd_pos = torch.tensor(
                 [
-                    # 1.0 * np.sin(2 * np.pi * step / steps),
+                    0.2 * math.sin(2 * math.pi * t),
                     0,
-                    # 0.3,
-                    0.8 * (1 - math.cos(2 * torch.pi * step / steps)),
-                    -0.6,
+                    0,
                     0,
                     0,
                     0,
                 ]
             )
-            velocities = torch.tensor(
-                [0, 0, 0, 0, 0, 0]
-            )  # You may want to calculate proper velocities
-
-            # if step > 100:
-            # positions = [0.0, 0.5, 0, 0., 0., 0.0]
-            # current_positions, current_velocities = arm_interface.get_joint_states()
-            # print("pos: ", np.array(current_positions))
-            # print("vel: ", np.array(current_velocities))
-            # torque = (nkp * (np.array(positions) - np.array(current_positions)) + nkd * (np.array(velocities) - np.array(current_velocities))).clip(-20, 20)
-            # torque[-3:] = 0
-
-            arm_interface.set_targets(positions, velocities)
-            # arm_interface.set_feed_forward_torques(torque.tolist())
-            # Read and print current joint states
-
-            # print(f"Current positions: {np.array(current_positions)}")
-            # print(f"Current positions: {arm_interface.get_forward_kinematics()}")
-            print(f"Current positions: {arm_interface.get_joint_states()}")
-            rate.sleep()  # Sleep for 100ms between updates
+            cmd_vel = torch.zeros(6)
+            arm_interface.set_targets(cmd_pos, cmd_vel)
+            # pos, vel = arm_interface.get_joint_states()
+            pos = arm_interface.joint_pos_raw
+            vel = arm_interface.joint_vel_raw
+            eff_calc = 80 * (cmd_pos - pos) + 15 * (0 - vel)
+            # plot.send([vel[:3].tolist(), arm_interface.joint_vel_raw[:3].tolist()])
+            plot.send(
+                [eff_calc[:3].tolist(), arm_interface.joint_efforts_raw[:3].tolist()]
+            )
+            # now = time.perf_counter()
+            # print(arm_interface.count / (now - arm_interface.start_time))
+            rate.sleep()
 
         arm_interface.stop()
     except rospy.ROSInterruptException:

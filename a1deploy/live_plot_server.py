@@ -14,10 +14,11 @@ class LivePlotServer(QtCore.QObject):
         super().__init__()
         self.app = QtWidgets.QApplication(sys.argv)
         self.win = pg.GraphicsLayoutWidget(show=True, title="Real-Time Plotting")
-        self.win.resize(800, 600)  # 可选：调整窗口大小
+        self.win.resize(800, 600)  # Optional: Adjust window size
         self.plots = []
         self.curves = []
         self.data = []
+        self.index = []  # 用于存储 x 轴的索引
 
         # Set up ZeroMQ and the thread to receive data
         self.context = zmq.Context()
@@ -39,53 +40,73 @@ class LivePlotServer(QtCore.QObject):
         """Receive data in a separate thread and emit it to the main thread."""
         while True:
             data = self.socket.recv_pyobj()  # Receive data from ZeroMQ
-            # print(data)
+            if not data:
+                continue
+            # Normalize data to be a list of lists
+            if not isinstance(data[0], list):
+                data = [data]
             self.data_received.emit(
                 data
             )  # Emit the data as a signal to the main thread
 
     def update_plots(self, data):
         """Update the plots in the main thread based on the received data."""
-        n = len(data)
+        m = len(data)  # Number of curves per plot
+        n = len(data[0])  # Number of plots
+
+        # Check that all inner lists have the same length
+        if not all(len(inner_list) == n for inner_list in data):
+            print("All inner lists must have the same length")
+            return
+
         if n != len(self.plots):
+            # Re-initialize plots
             self.win.clear()
             self.plots = []
-            self.curves = []
-            self.data = [[] for _ in range(n)]
+            self.curves = [[] for _ in range(n)]
+            self.data = [[[] for _ in range(m)] for _ in range(n)]
+            self.index = [[] for _ in range(n)]  # 初始化索引列表
             for i in range(n):
                 p = self.win.addPlot(row=i, col=0)
-
-                # 启用网格线
                 p.showGrid(x=True, y=True)
-
-                # 可选：如果希望X轴范围固定，可以保留以下两行，否则移除
-                # p.setXRange(0, 500)  # 假设你希望在X轴上也固定范围
-
-                # 创建曲线，设置线条颜色和粗细
-                c = p.plot(pen=pg.mkPen(width=2))  # 设置线条宽度为2像素
-
+                curve_list = []
+                for j in range(m):
+                    pen = pg.mkPen(width=2, color=pg.intColor(j))
+                    c = p.plot(pen=pen)
+                    curve_list.append(c)
+                self.curves[i] = curve_list
                 self.plots.append(p)
-                self.curves.append(c)
-                # 在y=0位置画一条水平线
                 hline = pg.InfiniteLine(
                     pos=0, angle=0, pen=pg.mkPen(color="r", width=1)
-                )  # 红色，线宽1
+                )
                 p.addItem(hline)
-        # Update the data
+
+        # Update data
         for i in range(n):
-            self.data[i].append(data[i])
-            if len(self.data[i]) > 500:  # Keep the data length under 500
-                self.data[i] = self.data[i][-500:]
+            for j in range(m):
+                self.data[i][j].append(data[j][i])
+                if len(self.data[i][j]) > 500:
+                    self.data[i][j] = self.data[i][j][-500:]
+            self.index[i].append(len(self.index[i]))  # 更新索引
+            if len(self.index[i]) > 500:
+                self.index[i] = self.index[i][-500:]
 
     def update(self):
         """Update the curves with the latest data."""
-        for i, curve in enumerate(self.curves):
-            curve.setData(self.data[i])
-            # 自适应Y轴范围
-            if self.data[i]:
-                min_y = min(self.data[i])
-                max_y = max(self.data[i])
-                # 添加一些填充以避免数据紧贴边界
+        if not self.curves:
+            return
+        n = len(self.plots)
+        m = len(self.curves[0])
+        for i in range(n):
+            for j in range(m):
+                self.curves[i][j].setData(self.data[i][j])
+            # Adjust Y-axis range
+            all_data = []
+            for d in self.data[i]:
+                all_data.extend(d)
+            if all_data:
+                min_y = min(all_data)
+                max_y = max(all_data)
                 padding = (max_y - min_y) * 0.1 if max_y != min_y else 1
                 self.plots[i].setYRange(min_y - padding, max_y + padding)
 
